@@ -1248,3 +1248,145 @@ p {
   color: var(--text-bone);
 }
 
+/* Interactive Booking Calendar & Time Slots */
+.date-quick-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.date-chip {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--hairline-strong);
+  color: var(--text-ash);
+  padding: 0.45rem 0.75rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  cursor: pointer;
+  border-radius: var(--radius-sharp);
+  transition: all 0.2s ease;
+}
+
+.date-chip:hover,
+.date-chip.active {
+  border-color: var(--accent-gold);
+  color: var(--accent-gold);
+  background: rgba(229, 193, 133, 0.08);
+}
+
+.slot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+}
+
+.slot-btn {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--hairline-strong);
+  color: var(--text-bone);
+  padding: 0.65rem 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  text-align: center;
+  cursor: pointer;
+  border-radius: var(--radius-sharp);
+  transition: all 0.2s ease;
+}
+
+.slot-btn:hover:not(:disabled) {
+  border-color: var(--accent-gold);
+  color: var(--accent-gold);
+}
+
+.slot-btn.selected {
+  background: var(--accent-gold);
+  border-color: var(--accent-gold);
+  color: #0b0a0c;
+  font-weight: 700;
+}
+
+.slot-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  text-decoration: line-through;
+}
+
+.deposit-notice {
+  background: rgba(229, 193, 133, 0.07);
+  border: 1px solid rgba(229, 193, 133, 0.28);
+  padding: 0.9rem 1rem;
+  border-radius: var(--radius-sharp);
+  font-size: 0.86rem;
+  color: var(--text-ash);
+}
+
+.status-badge {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  padding: 0.28rem 0.6rem;
+  border-radius: var(--radius-sharp);
+  border: 1px solid var(--hairline-strong);
+}
+
+.status-pending {
+  color: var(--accent-gold);
+  border-color: rgba(229, 193, 133, 0.45);
+  background: rgba(229, 193, 133, 0.08);
+}
+
+.status-awaiting {
+  color: #7dd3fc;
+  border-color: rgba(125, 211, 252, 0.45);
+  background: rgba(125, 211, 252, 0.08);
+}
+
+.status-confirmed {
+  color: #86efac;
+  border-color: rgba(134, 239, 172, 0.45);
+  background: rgba(134, 239, 172, 0.08);
+}
+
+.status-declined {
+  color: #fda4af;
+  border-color: rgba(253, 164, 175, 0.45);
+  background: rgba(253, 164, 175, 0.08);
+}
+
+.admin-booking-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.admin-booking-card {
+  background: var(--bg-velvet);
+  border: 1px solid var(--hairline-strong);
+  padding: 1.5rem;
+  border-radius: var(--radius-sharp);
+}
+
+.admin-booking-top {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--hairline);
+  margin-bottom: 1rem;
+}
+
+.admin-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+}
+
+

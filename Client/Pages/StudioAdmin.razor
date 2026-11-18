@@ -1,0 +1,276 @@
+@page "/studio-admin"
+@using System.Net.Http.Json
+@inject HttpClient Http
+@inject NavigationManager Nav
+
+<PageTitle>Studio Approval Portal | Spectrum Tattoo</PageTitle>
+
+<section class="section">
+    <div class="container">
+        <div class="section-header">
+            <span class="eyebrow">Artist &amp; Studio Portal</span>
+            <h1 class="section-title">Booking <em>Approvals</em> &amp; Deposits</h1>
+            <p>
+                Review incoming appointment requests, approve slots for your calendar, and issue Stripe deposit links or confirm in-studio deposits.
+            </p>
+        </div>
+
+        @if (!_unlocked)
+        {
+            <div class="form-panel" style="max-width: 440px;">
+                <span class="eyebrow">Studio Access</span>
+                <h2 style="font-size: 1.65rem; margin: 0.6rem 0 1rem;">Enter Studio PIN</h2>
+                <div class="field-group">
+                    <label class="field-label" for="studio-pin">PIN</label>
+                    <input id="studio-pin" type="password" class="field-input" @bind="_pin" placeholder="Enter studio PIN" />
+                </div>
+                @if (!string.IsNullOrWhiteSpace(_authError))
+                {
+                    <div class="validation-message" style="margin-top: 0.6rem;">@_authError</div>
+                }
+                <button type="button" class="btn btn-primary" style="margin-top: 1.25rem;" @onclick="UnlockAsync" disabled="@_loading">
+                    @(_loading ? "Checking..." : "Unlock Portal")
+                </button>
+            </div>
+        }
+        else
+        {
+            <div class="deposit-notice" style="margin-bottom: 1.75rem; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem;">
+                @if (_stripeConfigured)
+                {
+                    <span><strong style="color: #86efac;">Stripe Connected:</strong> Approving a booking automatically generates a Stripe Checkout deposit link.</span>
+                }
+                else
+                {
+                    <span><strong style="color: var(--accent-gold);">Stripe Keys Awaiting Client:</strong> Approvals work now—add <code>STRIPE_SECRET_KEY</code> &amp; <code>STRIPE_WEBHOOK_SECRET</code> in Azure SWA settings when ready, or use <strong>Mark Deposit Paid (Manual)</strong> for in-studio/cash deposits.</span>
+                }
+                <button type="button" class="btn btn-outline btn-sm" @onclick="LoadBookingsAsync">Refresh</button>
+            </div>
+
+            <div class="gallery-filters" style="margin-bottom: 1.5rem;">
+                @foreach (var tab in _statusTabs)
+                {
+                    <button type="button"
+                            class="filter-pill @(_statusFilter == tab.Key ? "active" : "")"
+                            @onclick="() => _statusFilter = tab.Key">
+                        @tab.Label (@CountByStatus(tab.Key))
+                    </button>
+                }
+            </div>
+
+            @if (!FilteredBookings.Any())
+            {
+                <div class="form-panel">
+                    <p style="margin: 0; color: var(--text-ash);">No booking requests in this view yet.</p>
+                </div>
+            }
+            else
+            {
+                <div class="admin-booking-list">
+                    @foreach (var b in FilteredBookings)
+                    {
+                        <article class="admin-booking-card">
+                            <div class="admin-booking-top">
+                                <div>
+                                    <span class="eyebrow">@b.Id &middot; @b.Artist</span>
+                                    <h2 style="font-size: 1.65rem; margin: 0.35rem 0;">@b.Name &mdash; @b.ServiceType</h2>
+                                    <div style="font-family: var(--font-mono); font-size: 0.84rem; color: var(--accent-gold);">
+                                        @b.Date &middot; @b.TimeSlot &middot; Deposit: $@((b.DepositAmountCents / 100.0).ToString("0.00"))
+                                    </div>
+                                </div>
+                                <span class="status-badge @GetStatusClass(b.Status)">@b.Status</span>
+                            </div>
+
+                            <p style="margin-bottom: 0.5rem;">
+                                <strong>Contact:</strong> <a href="tel:@b.Phone" style="color: var(--accent-gold);">@b.Phone</a> &middot; @b.Email
+                                @if (!string.IsNullOrWhiteSpace(b.Placement))
+                                {
+                                    <span> &middot; <strong>Placement:</strong> @b.Placement</span>
+                                }
+                            </p>
+                            <p style="margin-bottom: 0.75rem; color: var(--text-bone);">@b.IdeaDescription</p>
+
+                            @if (!string.IsNullOrWhiteSpace(b.StripeCheckoutUrl))
+                            {
+                                <p style="font-size: 0.85rem; margin-bottom: 0.75rem;">
+                                    <strong>Stripe Deposit Link:</strong>
+                                    <a href="@b.StripeCheckoutUrl" target="_blank" rel="noopener noreferrer" style="color: var(--accent-gold); text-decoration: underline;">
+                                        Open Checkout
+                                    </a>
+                                </p>
+                            }
+
+                            <div class="form-grid form-grid-2" style="margin-top: 0.75rem;">
+                                <div class="field-group">
+                                    <label class="field-label">Artist Note (optional)</label>
+                                    <input type="text" class="field-input" @bind="_notes[b.Id]" placeholder="e.g. Please bring reference photo; 2-hour block" />
+                                </div>
+                                <div class="field-group">
+                                    <label class="field-label">Deposit Amount (USD)</label>
+                                    <input type="number" min="10" step="5" class="field-input" @bind="_depositDollars[b.Id]" />
+                                </div>
+                            </div>
+
+                            <div class="admin-actions-row">
+                                @if (b.Status == "PendingApproval")
+                                {
+                                    <button type="button" class="btn btn-primary btn-sm" @onclick="() => ApproveAsync(b.Id)">
+                                        Approve &amp; Request Deposit
+                                    </button>
+                                }
+                                @if (b.Status is "PendingApproval" or "ApprovedAwaitingDeposit")
+                                {
+                                    <button type="button" class="btn btn-outline btn-sm" @onclick="() => ConfirmManualAsync(b.Id)">
+                                        Mark Deposit Paid (Manual)
+                                    </button>
+                                    <button type="button" class="btn btn-outline btn-sm" style="border-color: rgba(253,164,175,0.45); color: #fda4af;" @onclick="() => DeclineAsync(b.Id)">
+                                        Decline
+                                    </button>
+                                }
+                                <a href="/book?bookingId=@b.Id" class="btn btn-outline btn-sm">Client Status Link</a>
+                                <a href="/api/bookings/@b.Id/ics" class="btn btn-outline btn-sm">.ics Calendar</a>
+                            </div>
+                        </article>
+                    }
+                </div>
+            }
+        }
+    </div>
+</section>
+
+@code {
+    private string _pin = string.Empty;
+    private bool _unlocked;
+    private bool _loading;
+    private string? _authError;
+    private bool _stripeConfigured;
+    private string _statusFilter = "All";
+    private List<AdminBookingItem> _bookings = [];
+    private readonly Dictionary<string, string> _notes = new();
+    private readonly Dictionary<string, int> _depositDollars = new();
+
+    private readonly (string Key, string Label)[] _statusTabs =
+    [
+        ("All", "All"),
+        ("PendingApproval", "Pending Approval"),
+        ("ApprovedAwaitingDeposit", "Awaiting Deposit"),
+        ("Confirmed", "Confirmed"),
+        ("Declined", "Declined")
+    ];
+
+    private IEnumerable<AdminBookingItem> FilteredBookings =>
+        _statusFilter == "All"
+            ? _bookings
+            : _bookings.Where(b => b.Status == _statusFilter);
+
+    private int CountByStatus(string key) =>
+        key == "All" ? _bookings.Count : _bookings.Count(b => b.Status == key);
+
+    private async Task UnlockAsync()
+    {
+        _authError = null;
+        _loading = true;
+        try
+        {
+            await LoadBookingsAsync();
+            if (_authError is null)
+                _unlocked = true;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task LoadBookingsAsync()
+    {
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, "api/bookings");
+            req.Headers.Add("X-Studio-Pin", _pin.Trim());
+            var resp = await Http.SendAsync(req);
+            if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                _authError = "Invalid studio PIN.";
+                return;
+            }
+
+            var data = await resp.Content.ReadFromJsonAsync<AdminListResponse>();
+            if (data?.Ok == true)
+            {
+                _stripeConfigured = data.StripeConfigured;
+                _bookings = data.Bookings ?? [];
+                foreach (var b in _bookings)
+                {
+                    if (!_notes.ContainsKey(b.Id))
+                        _notes[b.Id] = b.ArtistNote ?? string.Empty;
+                    if (!_depositDollars.ContainsKey(b.Id))
+                        _depositDollars[b.Id] = Math.Max(10, b.DepositAmountCents / 100);
+                }
+            }
+        }
+        catch
+        {
+            _authError = "Unable to reach studio API.";
+        }
+    }
+
+    private async Task ApproveAsync(string id)
+    {
+        var dollars = _depositDollars.TryGetValue(id, out var d) && d >= 10 ? d : 50;
+        var note = _notes.TryGetValue(id, out var n) ? n : null;
+        using var req = new HttpRequestMessage(HttpMethod.Post, $"api/bookings/{id}/approve")
+        {
+            Content = JsonContent.Create(new { artistNote = note, depositAmountCents = dollars * 100 })
+        };
+        req.Headers.Add("X-Studio-Pin", _pin.Trim());
+        await Http.SendAsync(req);
+        await LoadBookingsAsync();
+    }
+
+    private async Task ConfirmManualAsync(string id)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, $"api/bookings/{id}/confirm-manual");
+        req.Headers.Add("X-Studio-Pin", _pin.Trim());
+        await Http.SendAsync(req);
+        await LoadBookingsAsync();
+    }
+
+    private async Task DeclineAsync(string id)
+    {
+        var note = _notes.TryGetValue(id, out var n) ? n : null;
+        using var req = new HttpRequestMessage(HttpMethod.Post, $"api/bookings/{id}/decline")
+        {
+            Content = JsonContent.Create(new { artistNote = note })
+        };
+        req.Headers.Add("X-Studio-Pin", _pin.Trim());
+        await Http.SendAsync(req);
+        await LoadBookingsAsync();
+    }
+
+    private static string GetStatusClass(string status) => status switch
+    {
+        "Confirmed" => "status-confirmed",
+        "ApprovedAwaitingDeposit" => "status-awaiting",
+        "Declined" => "status-declined",
+        _ => "status-pending"
+    };
+
+    private sealed record AdminListResponse(bool Ok, bool StripeConfigured, List<AdminBookingItem>? Bookings);
+    private sealed record AdminBookingItem(
+        string Id,
+        string Artist,
+        string Date,
+        string TimeSlot,
+        string ServiceType,
+        string Name,
+        string Phone,
+        string Email,
+        string Placement,
+        string IdeaDescription,
+        string Status,
+        int DepositAmountCents,
+        bool DepositPaid,
+        string? StripeCheckoutUrl,
+        string? ArtistNote);
+}
