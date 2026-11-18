@@ -44,8 +44,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
 
-      - name: Publish Blazor Client
-        run: dotnet publish Client/SpectrumTattoo.Client.csproj -c Release -o publish_output
+      - name: Publish Blazor Client & Azure Functions API
+        run: |
+          dotnet publish Client/SpectrumTattoo.Client.csproj -c Release -p:ContinuousIntegrationBuild=true -o publish_output
+          dotnet publish Api/SpectrumTattoo.Api.csproj -c Release -p:ContinuousIntegrationBuild=true -o api_output
 
       - name: Build And Deploy
         id: builddeploy
@@ -58,9 +60,10 @@ jobs:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           action: "upload"
           app_location: "publish_output/wwwroot"
-          # Temporarily omitted due to Azure SWA Free-tier Managed Functions bug (Azure/static-web-apps#1819, #1821)
+          api_location: "api_output"
           output_location: ""
           skip_app_build: true
+          skip_api_build: true
 
       - name: Submit URLs to IndexNow
         if: github.event_name == 'push'

@@ -1,7 +1,5 @@
 using System.Globalization;
 using System.Net;
-using System.Net.Http.Headers;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Azure.Functions.Worker;
@@ -45,9 +43,6 @@ public class BookingsFunction(
             ? cents
             : 5000;
 
-    private static bool IsStripeConfigured() =>
-        !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("STRIPE_SECRET_KEY"));
-
     private static bool IsAuthorized(HttpRequestData req)
     {
         if (!req.Headers.TryGetValues("X-Studio-Pin", out var values))
@@ -71,6 +66,13 @@ public class BookingsFunction(
         return dict;
     }
 
+    private static async Task<HttpResponseData> JsonResponse(HttpRequestData req, HttpStatusCode status, object body)
+    {
+        var resp = req.CreateResponse(status);
+        await resp.WriteAsJsonAsync(body);
+        return resp;
+    }
+
     [Function("Bookings")]
     public async Task<HttpResponseData> HandleBookings(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", "post", Route = "bookings")] HttpRequestData req)
@@ -88,49 +90,23 @@ public class BookingsFunction(
                 var dateStr = (query.TryGetValue("date", out var d) ? d : string.Empty).Trim();
 
                 if (!DateOnly.TryParseExact(dateStr, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
-                {
-                    var bad = req.CreateResponse(HttpStatusCode.BadRequest);
-                    await bad.WriteAsJsonAsync(new { ok = false, error = "Invalid date format. Expected yyyy-MM-dd." });
-                    return bad;
-                }
+                    return await JsonResponse(req, HttpStatusCode.BadRequest, new { ok = false, error = "Invalid date format. Expected yyyy-MM-dd." });
 
                 var (isOpen, note, slots) = BookingStore.GetStudioSchedule(date);
-                var allBookings = await store.ListAsync();
+                if (!isOpen)
+                    return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, isOpen = false, note, slots = Array.Empty<object>() });
 
+                var allBookings = await store.ListAsync();
                 var takenSlots = allBookings
                     .Where(b => string.Equals(b.Date, dateStr, StringComparison.OrdinalIgnoreCase)
                                 && (string.Equals(b.Artist, artist, StringComparison.OrdinalIgnoreCase)
                                     || string.Equals(artist, "First Available Artist", StringComparison.OrdinalIgnoreCase))
-                                && (b.Status == "Confirmed" || b.Status == "ApprovedAwaitingDeposit"))
-                    .ToDictionary(b => b.TimeSlot, b => b.Status, StringComparer.OrdinalIgnoreCase);
+                                && b.Status is "Confirmed" or "ApprovedAwaitingDeposit")
+                    .Select(b => b.TimeSlot)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-                var pendingCounts = allBookings
-                    .Where(b => string.Equals(b.Date, dateStr, StringComparison.OrdinalIgnoreCase)
-                                && string.Equals(b.Artist, artist, StringComparison.OrdinalIgnoreCase)
-                                && b.Status == "PendingApproval")
-                    .GroupBy(b => b.TimeSlot, StringComparer.OrdinalIgnoreCase)
-                    .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
-
-                var slotList = slots.Select(s => new
-                {
-                    time = s,
-                    available = !takenSlots.ContainsKey(s),
-                    pendingRequests = pendingCounts.TryGetValue(s, out var c) ? c : 0
-                });
-
-                var availOk = req.CreateResponse(HttpStatusCode.OK);
-                await availOk.WriteAsJsonAsync(new
-                {
-                    ok = true,
-                    date = dateStr,
-                    artist,
-                    isOpen,
-                    note,
-                    depositAmountCents = GetDefaultDepositCents(),
-                    stripeConfigured = IsStripeConfigured(),
-                    slots = slotList
-                });
-                return availOk;
+                var slotList = slots.Select(s => new { time = s, available = !takenSlots.Contains(s) }).ToArray();
+                return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, isOpen = true, note, slots = slotList });
             }
 
             if (op == "ics")
@@ -175,56 +151,19 @@ public class BookingsFunction(
             {
                 var single = await store.GetAsync(lookupId.Trim());
                 if (single is null)
-                {
-                    var notFound = req.CreateResponse(HttpStatusCode.NotFound);
-                    await notFound.WriteAsJsonAsync(new { ok = false, error = "Booking not found." });
-                    return notFound;
-                }
+                    return await JsonResponse(req, HttpStatusCode.NotFound, new { ok = false, error = "Booking not found." });
 
-                var singleOk = req.CreateResponse(HttpStatusCode.OK);
-                await singleOk.WriteAsJsonAsync(new
-                {
-                    ok = true,
-                    booking = new
-                    {
-                        single.Id,
-                        single.Artist,
-                        single.Date,
-                        single.TimeSlot,
-                        single.ServiceType,
-                        single.Name,
-                        single.Status,
-                        single.DepositAmountCents,
-                        single.DepositPaid,
-                        single.StripeCheckoutUrl,
-                        single.ArtistNote,
-                        icsUrl = $"/api/bookings?op=ics&id={single.Id}"
-                    },
-                    stripeConfigured = IsStripeConfigured()
-                });
-                return singleOk;
+                return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, booking = single });
             }
 
             if (!IsAuthorized(req))
-            {
-                var unauth = req.CreateResponse(HttpStatusCode.Unauthorized);
-                await unauth.WriteAsJsonAsync(new { ok = false, error = "Invalid studio PIN." });
-                return unauth;
-            }
+                return await JsonResponse(req, HttpStatusCode.Unauthorized, new { ok = false, error = "Invalid studio PIN." });
 
             var bookings = await store.ListAsync();
-            var listOk = req.CreateResponse(HttpStatusCode.OK);
-            await listOk.WriteAsJsonAsync(new
-            {
-                ok = true,
-                stripeConfigured = IsStripeConfigured(),
-                defaultDepositCents = GetDefaultDepositCents(),
-                bookings
-            });
-            return listOk;
+            return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, bookings });
         }
 
-        // POST: either admin action (op = approve | confirm-manual | decline) or new booking request
+        // POST: admin actions, simulated deposit, or new booking request
         BookingPostPayload? payload;
         try
         {
@@ -232,281 +171,132 @@ public class BookingsFunction(
         }
         catch
         {
-            var bad = req.CreateResponse(HttpStatusCode.BadRequest);
-            await bad.WriteAsJsonAsync(new { ok = false, error = "Invalid booking payload." });
-            return bad;
+            return await JsonResponse(req, HttpStatusCode.BadRequest, new { ok = false, error = "Invalid booking payload." });
         }
 
         if (payload is null)
-        {
-            var bad = req.CreateResponse(HttpStatusCode.BadRequest);
-            await bad.WriteAsJsonAsync(new { ok = false, error = "Empty payload." });
-            return bad;
-        }
+            return await JsonResponse(req, HttpStatusCode.BadRequest, new { ok = false, error = "Empty payload." });
 
-        var postOp = payload.Op?.Trim().ToLowerInvariant();
-        if (postOp is "approve" or "confirm-manual" or "decline")
+        var postOp = (payload.Op ?? string.Empty).Trim().ToLowerInvariant();
+
+        if (postOp == "seed")
         {
             if (!IsAuthorized(req))
+                return await JsonResponse(req, HttpStatusCode.Unauthorized, new { ok = false, error = "Invalid studio PIN." });
+
+            var existing = await store.ListAsync();
+            if (existing.Count == 0)
             {
-                var unauth = req.CreateResponse(HttpStatusCode.Unauthorized);
-                await unauth.WriteAsJsonAsync(new { ok = false, error = "Invalid studio PIN." });
-                return unauth;
+                var nextOpen = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(1));
+                while (nextOpen.DayOfWeek is DayOfWeek.Monday or DayOfWeek.Tuesday)
+                    nextOpen = nextOpen.AddDays(1);
+
+                var demo = new BookingRecord
+                {
+                    Id = "ST-DEMO01",
+                    Artist = "Dawn Yermasek",
+                    Date = nextOpen.ToString("yyyy-MM-dd"),
+                    TimeSlot = "11:30 AM",
+                    ServiceType = "Custom Tattoo",
+                    Name = "Sample Client",
+                    Phone = "(423) 555-0142",
+                    Email = "client@example.com",
+                    Placement = "Outer forearm, ~5 in",
+                    IdeaDescription = "Watercolor luna moth with fine-line fern botanicals.",
+                    Status = "PendingApproval",
+                    DepositAmountCents = GetDefaultDepositCents(),
+                    DepositPaid = false,
+                    CreatedAt = DateTimeOffset.UtcNow
+                };
+                await store.UpsertAsync(demo);
             }
+
+            return await JsonResponse(req, HttpStatusCode.OK, new { ok = true });
+        }
+
+        if (postOp is "approve" or "confirm" or "confirm-manual" or "decline" or "simulate-deposit")
+        {
+            if (postOp != "simulate-deposit" && !IsAuthorized(req))
+                return await JsonResponse(req, HttpStatusCode.Unauthorized, new { ok = false, error = "Invalid studio PIN." });
 
             if (string.IsNullOrWhiteSpace(payload.Id))
-            {
-                var bad = req.CreateResponse(HttpStatusCode.BadRequest);
-                await bad.WriteAsJsonAsync(new { ok = false, error = "Booking id is required." });
-                return bad;
-            }
+                return await JsonResponse(req, HttpStatusCode.BadRequest, new { ok = false, error = "Booking id is required." });
 
-            var target = await store.GetAsync(payload.Id.Trim());
-            if (target is null)
-            {
-                var notFound = req.CreateResponse(HttpStatusCode.NotFound);
-                await notFound.WriteAsJsonAsync(new { ok = false, error = "Booking not found." });
-                return notFound;
-            }
-
-            if (!string.IsNullOrWhiteSpace(payload.ArtistNote))
-                target.ArtistNote = payload.ArtistNote.Trim();
+            var item = await store.GetAsync(payload.Id);
+            if (item is null)
+                return await JsonResponse(req, HttpStatusCode.NotFound, new { ok = false, error = "Booking not found." });
 
             if (postOp == "approve")
             {
-                if (payload.DepositAmountCents is > 0)
-                    target.DepositAmountCents = payload.DepositAmountCents.Value;
-
-                target.Status = "ApprovedAwaitingDeposit";
-                var stripeSecret = Environment.GetEnvironmentVariable("STRIPE_SECRET_KEY");
-                if (!string.IsNullOrWhiteSpace(stripeSecret))
-                {
-                    var baseUrl = $"{req.Url.Scheme}://{req.Url.Authority}";
-                    var session = await CreateStripeCheckoutSessionAsync(stripeSecret, target, baseUrl);
-                    if (session is not null)
-                    {
-                        target.StripeSessionId = session.Value.SessionId;
-                        target.StripeCheckoutUrl = session.Value.CheckoutUrl;
-                    }
-                }
+                item.Status = "ApprovedAwaitingDeposit";
+                item.DepositPaid = false;
             }
-            else if (postOp == "confirm-manual")
+            else if (postOp is "confirm" or "confirm-manual" or "simulate-deposit")
             {
-                target.DepositPaid = true;
-                target.Status = "Confirmed";
+                item.Status = "Confirmed";
+                item.DepositPaid = true;
             }
-            else
+            else if (postOp == "decline")
             {
-                target.Status = "Declined";
+                item.Status = "Declined";
+                item.DepositPaid = false;
             }
 
-            await store.SaveAsync(target);
-            var actionOk = req.CreateResponse(HttpStatusCode.OK);
-            await actionOk.WriteAsJsonAsync(new { ok = true, stripeConfigured = IsStripeConfigured(), booking = target });
-            return actionOk;
+            if (payload.ArtistNote is not null) item.ArtistNote = payload.ArtistNote;
+            if (payload.DepositAmountCents is >= 1000) item.DepositAmountCents = payload.DepositAmountCents.Value;
+
+            var (saved, saveErr) = await store.UpsertAsync(item);
+            if (!saved)
+                return await JsonResponse(req, HttpStatusCode.BadGateway, new { ok = false, error = saveErr });
+
+            return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, booking = item });
         }
 
-        if (string.IsNullOrWhiteSpace(payload.Name)
-            || string.IsNullOrWhiteSpace(payload.Phone)
-            || string.IsNullOrWhiteSpace(payload.Email)
-            || string.IsNullOrWhiteSpace(payload.Date)
-            || string.IsNullOrWhiteSpace(payload.TimeSlot))
-        {
-            var bad = req.CreateResponse(HttpStatusCode.BadRequest);
-            await bad.WriteAsJsonAsync(new { ok = false, error = "Name, phone, email, date, and time slot are required." });
-            return bad;
-        }
+        // Create new booking
+        var artist = (payload.Artist ?? "First Available Artist").Trim();
+        var dateStrNew = (payload.Date ?? string.Empty).Trim();
+        var timeSlot = (payload.TimeSlot ?? string.Empty).Trim();
 
-        if (!DateOnly.TryParseExact(payload.Date, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedDate))
-        {
-            var bad = req.CreateResponse(HttpStatusCode.BadRequest);
-            await bad.WriteAsJsonAsync(new { ok = false, error = "Invalid date." });
-            return bad;
-        }
+        if (!DateOnly.TryParseExact(dateStrNew, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedDate))
+            return await JsonResponse(req, HttpStatusCode.BadRequest, new { ok = false, error = "Please select a valid date." });
 
-        var (open, schedNote, validSlots) = BookingStore.GetStudioSchedule(parsedDate);
-        if (!open || !validSlots.Contains(payload.TimeSlot, StringComparer.OrdinalIgnoreCase))
-        {
-            var bad = req.CreateResponse(HttpStatusCode.BadRequest);
-            await bad.WriteAsJsonAsync(new { ok = false, error = schedNote });
-            return bad;
-        }
+        var (studioOpen, _, validSlots) = BookingStore.GetStudioSchedule(parsedDate);
+        if (!studioOpen || !validSlots.Contains(timeSlot, StringComparer.OrdinalIgnoreCase))
+            return await JsonResponse(req, HttpStatusCode.BadRequest, new { ok = false, error = "Selected date or time slot is not open." });
 
-        var reqArtist = string.IsNullOrWhiteSpace(payload.Artist) ? "First Available Artist" : payload.Artist.Trim();
-        var existing = await store.ListAsync();
-        var conflict = existing.Any(b =>
-            string.Equals(b.Date, payload.Date, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(b.TimeSlot, payload.TimeSlot, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(b.Artist, reqArtist, StringComparison.OrdinalIgnoreCase)
-            && (b.Status == "Confirmed" || b.Status == "ApprovedAwaitingDeposit"));
+        var currentBookings = await store.ListAsync();
+        var conflict = currentBookings.Any(b =>
+            string.Equals(b.Date, dateStrNew, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(b.TimeSlot, timeSlot, StringComparison.OrdinalIgnoreCase)
+            && (string.Equals(b.Artist, artist, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(artist, "First Available Artist", StringComparison.OrdinalIgnoreCase))
+            && b.Status is "Confirmed" or "ApprovedAwaitingDeposit");
 
         if (conflict)
-        {
-            var conflictResp = req.CreateResponse(HttpStatusCode.Conflict);
-            await conflictResp.WriteAsJsonAsync(new { ok = false, error = "That time slot was just reserved. Please select another slot." });
-            return conflictResp;
-        }
+            return await JsonResponse(req, HttpStatusCode.Conflict, new { ok = false, error = "That time slot was just booked. Please pick another slot." });
 
-        var shortCode = $"ST-{Guid.NewGuid().ToString("N")[..6].ToUpperInvariant()}";
         var record = new BookingRecord
         {
-            Id = shortCode,
-            Artist = reqArtist,
-            Date = payload.Date,
-            TimeSlot = payload.TimeSlot,
-            ServiceType = string.IsNullOrWhiteSpace(payload.ServiceType) ? "Custom Tattoo" : payload.ServiceType.Trim(),
-            Name = payload.Name.Trim(),
-            Phone = payload.Phone.Trim(),
-            Email = payload.Email.Trim(),
-            Placement = payload.Placement?.Trim() ?? string.Empty,
-            IdeaDescription = payload.IdeaDescription?.Trim() ?? string.Empty,
+            Id = $"ST-{Guid.NewGuid().ToString("N")[..6].ToUpperInvariant()}",
+            Artist = artist,
+            Date = dateStrNew,
+            TimeSlot = timeSlot,
+            ServiceType = (payload.ServiceType ?? "Custom Tattoo").Trim(),
+            Name = (payload.Name ?? string.Empty).Trim(),
+            Phone = (payload.Phone ?? string.Empty).Trim(),
+            Email = (payload.Email ?? string.Empty).Trim(),
+            Placement = (payload.Placement ?? string.Empty).Trim(),
+            IdeaDescription = (payload.IdeaDescription ?? string.Empty).Trim(),
             Status = "PendingApproval",
             DepositAmountCents = GetDefaultDepositCents(),
             DepositPaid = false,
-            CreatedAt = DateTimeOffset.UtcNow,
-            UpdatedAt = DateTimeOffset.UtcNow
+            CreatedAt = DateTimeOffset.UtcNow
         };
 
-        await store.SaveAsync(record);
-        logger.LogInformation("Created booking request {Id} for {Artist} on {Date} at {Slot}.",
-            record.Id, record.Artist, record.Date, record.TimeSlot);
+        var (ok, err) = await store.UpsertAsync(record);
+        if (!ok)
+            return await JsonResponse(req, HttpStatusCode.BadGateway, new { ok = false, error = err });
 
-        var ok = req.CreateResponse(HttpStatusCode.OK);
-        await ok.WriteAsJsonAsync(new
-        {
-            ok = true,
-            booking = record,
-            icsUrl = $"/api/bookings?op=ics&id={record.Id}"
-        });
-        return ok;
-    }
-
-    [Function("StripeWebhook")]
-    public async Task<HttpResponseData> StripeWebhook(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "stripe-webhook")] HttpRequestData req)
-    {
-        using var reader = new StreamReader(req.Body, Encoding.UTF8);
-        var rawBody = await reader.ReadToEndAsync();
-
-        var webhookSecret = Environment.GetEnvironmentVariable("STRIPE_WEBHOOK_SECRET");
-        if (!string.IsNullOrWhiteSpace(webhookSecret))
-        {
-            if (!req.Headers.TryGetValues("Stripe-Signature", out var sigHeaders) ||
-                !VerifyStripeSignature(rawBody, sigHeaders.FirstOrDefault(), webhookSecret))
-            {
-                var bad = req.CreateResponse(HttpStatusCode.BadRequest);
-                await bad.WriteAsJsonAsync(new { ok = false, error = "Invalid Stripe signature." });
-                return bad;
-            }
-        }
-
-        try
-        {
-            using var doc = JsonDocument.Parse(rawBody);
-            var root = doc.RootElement;
-            var eventType = root.GetProperty("type").GetString();
-
-            if (eventType == "checkout.session.completed")
-            {
-                var session = root.GetProperty("data").GetProperty("object");
-                if (session.TryGetProperty("metadata", out var metadata) &&
-                    metadata.TryGetProperty("bookingId", out var bookingIdProp))
-                {
-                    var bookingId = bookingIdProp.GetString();
-                    if (!string.IsNullOrWhiteSpace(bookingId))
-                    {
-                        var store = CreateStore();
-                        var booking = await store.GetAsync(bookingId);
-                        if (booking is not null)
-                        {
-                            booking.DepositPaid = true;
-                            booking.Status = "Confirmed";
-                            await store.SaveAsync(booking);
-                            logger.LogInformation("Stripe deposit confirmed for booking {Id}.", bookingId);
-                        }
-                    }
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to process Stripe webhook.");
-        }
-
-        var ok = req.CreateResponse(HttpStatusCode.OK);
-        await ok.WriteAsJsonAsync(new { received = true });
-        return ok;
-    }
-
-    private async Task<(string SessionId, string CheckoutUrl)?> CreateStripeCheckoutSessionAsync(
-        string stripeSecret,
-        BookingRecord booking,
-        string baseUrl)
-    {
-        try
-        {
-            var client = httpClientFactory.CreateClient();
-            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", stripeSecret);
-
-            var form = new Dictionary<string, string>
-            {
-                ["mode"] = "payment",
-                ["success_url"] = $"{baseUrl}/book?bookingId={booking.Id}&payment=success",
-                ["cancel_url"] = $"{baseUrl}/book?bookingId={booking.Id}&payment=cancelled",
-                ["customer_email"] = booking.Email,
-                ["line_items[0][quantity]"] = "1",
-                ["line_items[0][price_data][currency]"] = "usd",
-                ["line_items[0][price_data][unit_amount]"] = booking.DepositAmountCents.ToString(CultureInfo.InvariantCulture),
-                ["line_items[0][price_data][product_data][name]"] =
-                    $"Spectrum Tattoo Non-Refundable Deposit ({booking.Artist} · {booking.Date} {booking.TimeSlot})",
-                ["metadata[bookingId]"] = booking.Id,
-                ["metadata[artist]"] = booking.Artist
-            };
-
-            using var content = new FormUrlEncodedContent(form);
-            var response = await client.PostAsync("https://api.stripe.com/v1/checkout/sessions", content);
-            var body = await response.Content.ReadAsStringAsync();
-
-            if (!response.IsSuccessStatusCode)
-            {
-                logger.LogWarning("Stripe Checkout creation failed ({Status}): {Body}", response.StatusCode, body);
-                return null;
-            }
-
-            using var doc = JsonDocument.Parse(body);
-            var sessionId = doc.RootElement.GetProperty("id").GetString() ?? string.Empty;
-            var url = doc.RootElement.GetProperty("url").GetString() ?? string.Empty;
-            return (sessionId, url);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Exception creating Stripe Checkout session.");
-            return null;
-        }
-    }
-
-    private static bool VerifyStripeSignature(string payload, string? sigHeader, string secret)
-    {
-        if (string.IsNullOrWhiteSpace(sigHeader)) return false;
-
-        string? timestamp = null;
-        string? signature = null;
-        foreach (var part in sigHeader.Split(','))
-        {
-            var kv = part.Split('=', 2);
-            if (kv.Length != 2) continue;
-            if (kv[0].Trim() == "t") timestamp = kv[1].Trim();
-            else if (kv[0].Trim() == "v1") signature = kv[1].Trim();
-        }
-
-        if (string.IsNullOrEmpty(timestamp) || string.IsNullOrEmpty(signature)) return false;
-
-        var signedPayload = $"{timestamp}.{payload}";
-        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
-        var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(signedPayload));
-        var computed = Convert.ToHexString(hash).ToLowerInvariant();
-        return CryptographicOperations.FixedTimeEquals(
-            Encoding.UTF8.GetBytes(computed),
-            Encoding.UTF8.GetBytes(signature.ToLowerInvariant()));
+        return await JsonResponse(req, HttpStatusCode.Created, new { ok = true, booking = record });
     }
 }

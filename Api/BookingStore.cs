@@ -1,233 +1,236 @@
 using System.Collections.Concurrent;
 using System.Globalization;
-using System.Net.Http.Headers;
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 
 namespace SpectrumTattoo.Api;
 
 public sealed class BookingRecord
 {
+    [JsonPropertyName("id")]
     public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("businessId")]
+    public string BusinessId { get; set; } = BookingStore.PartitionKey;
+
+    [JsonPropertyName("artist")]
     public string Artist { get; set; } = string.Empty;
+
+    [JsonPropertyName("date")]
     public string Date { get; set; } = string.Empty; // yyyy-MM-dd
+
+    [JsonPropertyName("timeSlot")]
     public string TimeSlot { get; set; } = string.Empty; // e.g. "10:00 AM"
+
+    [JsonPropertyName("serviceType")]
     public string ServiceType { get; set; } = "Custom Tattoo";
+
+    [JsonPropertyName("name")]
     public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("phone")]
     public string Phone { get; set; } = string.Empty;
+
+    [JsonPropertyName("email")]
     public string Email { get; set; } = string.Empty;
+
+    [JsonPropertyName("placement")]
     public string Placement { get; set; } = string.Empty;
+
+    [JsonPropertyName("ideaDescription")]
     public string IdeaDescription { get; set; } = string.Empty;
+
+    [JsonPropertyName("status")]
     public string Status { get; set; } = "PendingApproval"; // PendingApproval | ApprovedAwaitingDeposit | Confirmed | Declined
+
+    [JsonPropertyName("depositAmountCents")]
     public int DepositAmountCents { get; set; } = 5000;
+
+    [JsonPropertyName("depositPaid")]
     public bool DepositPaid { get; set; }
-    public string? StripeSessionId { get; set; }
-    public string? StripeCheckoutUrl { get; set; }
+
+    [JsonPropertyName("artistNote")]
     public string? ArtistNote { get; set; }
+
+    [JsonPropertyName("createdAt")]
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+
+    [JsonPropertyName("updatedAt")]
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
 public sealed class BookingStore
 {
-    private readonly ConcurrentDictionary<string, BookingRecord> _memory = new(StringComparer.OrdinalIgnoreCase);
-    private readonly IHttpClientFactory _httpClientFactory;
-    private readonly ILogger _logger;
-    private readonly string? _accountName;
-    private readonly byte[]? _accountKey;
-    private readonly string? _tableEndpoint;
-    private bool _tableEnsured;
+    public const string PartitionKey = "spectrum-tattoo-bookings";
+    private const string ContainerId = "leads";
+
+    private static readonly ConcurrentDictionary<string, BookingRecord> MemoryFallback = new(StringComparer.OrdinalIgnoreCase);
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         PropertyNameCaseInsensitive = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
+
+    private readonly HttpClient _http;
+    private readonly ILogger _logger;
+    private readonly string _endpoint;
+    private readonly string _key;
+    private readonly string _databaseId;
+    private readonly bool _useCosmos;
 
     public BookingStore(IHttpClientFactory httpClientFactory, ILogger logger)
     {
-        _httpClientFactory = httpClientFactory;
+        _http = httpClientFactory.CreateClient();
         _logger = logger;
-
-        var conn = Environment.GetEnvironmentVariable("AZURE_STORAGE_CONNECTION_STRING")
-                   ?? Environment.GetEnvironmentVariable("AzureWebJobsStorage");
-
-        if (!string.IsNullOrWhiteSpace(conn) &&
-            !conn.Contains("UseDevelopmentStorage=true", StringComparison.OrdinalIgnoreCase))
-        {
-            var parts = conn.Split(';', StringSplitOptions.RemoveEmptyEntries)
-                .Select(p => p.Split('=', 2))
-                .Where(kv => kv.Length == 2)
-                .ToDictionary(kv => kv[0].Trim(), kv => kv[1].Trim(), StringComparer.OrdinalIgnoreCase);
-
-            if (parts.TryGetValue("AccountName", out var acct) &&
-                parts.TryGetValue("AccountKey", out var key))
-            {
-                _accountName = acct;
-                _accountKey = Convert.FromBase64String(key);
-                var suffix = parts.TryGetValue("EndpointSuffix", out var s) ? s : "core.windows.net";
-                _tableEndpoint = $"https://{acct}.table.{suffix}";
-            }
-        }
+        _useCosmos = TryGetCosmosCredentials(out _endpoint, out _key, out _databaseId);
     }
 
-    private bool HasTableStorage => _accountName is not null && _accountKey is not null && _tableEndpoint is not null;
+    public bool IsCosmosConfigured => _useCosmos;
 
-    private HttpRequestMessage CreateTableRequest(HttpMethod method, string pathAndQuery, string? jsonBody = null)
+    private static bool TryGetCosmosCredentials(out string endpoint, out string key, out string databaseId)
     {
-        var dateHeader = DateTime.UtcNow.ToString("R", CultureInfo.InvariantCulture);
-        var resourcePath = pathAndQuery.Split('?')[0];
-        var stringToSign = $"{dateHeader}\n/{_accountName}/{resourcePath.TrimStart('/')}";
+        endpoint = Environment.GetEnvironmentVariable("COSMOS_ENDPOINT")?.TrimEnd('/') ?? "";
+        key = Environment.GetEnvironmentVariable("COSMOS_KEY") ?? "";
+        databaseId = Environment.GetEnvironmentVariable("COSMOS_DATABASE_NAME") ?? "SmallBusinessPlatform";
 
-        using var hmac = new HMACSHA256(_accountKey!);
-        var signature = Convert.ToBase64String(hmac.ComputeHash(Encoding.UTF8.GetBytes(stringToSign)));
-
-        var req = new HttpRequestMessage(method, $"{_tableEndpoint}{pathAndQuery}");
-        req.Headers.Add("x-ms-date", dateHeader);
-        req.Headers.Add("x-ms-version", "2020-12-06");
-        req.Headers.Add("Accept", "application/json;odata=nometadata");
-        req.Headers.Authorization = new AuthenticationHeaderValue("SharedKeyLite", $"{_accountName}:{signature}");
-
-        if (jsonBody is not null)
+        string connString = Environment.GetEnvironmentVariable("COSMOS_CONNECTION_STRING") ?? "";
+        if (!string.IsNullOrWhiteSpace(connString))
         {
-            req.Content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
-        }
-
-        return req;
-    }
-
-    private async Task EnsureTableAsync()
-    {
-        if (!HasTableStorage || _tableEnsured) return;
-        try
-        {
-            var client = _httpClientFactory.CreateClient();
-            using var req = CreateTableRequest(HttpMethod.Post, "/Tables", "{\"TableName\":\"SpectrumBookings\"}");
-            using var resp = await client.SendAsync(req);
-            _tableEnsured = resp.IsSuccessStatusCode || resp.StatusCode == System.Net.HttpStatusCode.Conflict;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Could not ensure SpectrumBookings table; using in-memory store.");
-        }
-    }
-
-    public async Task SaveAsync(BookingRecord record)
-    {
-        record.UpdatedAt = DateTimeOffset.UtcNow;
-        _memory[record.Id] = record;
-
-        if (!HasTableStorage) return;
-        await EnsureTableAsync();
-
-        try
-        {
-            var client = _httpClientFactory.CreateClient();
-            var payloadJson = JsonSerializer.Serialize(new
+            foreach (var part in connString.Split(';', StringSplitOptions.RemoveEmptyEntries))
             {
-                PartitionKey = "BOOKING",
-                RowKey = record.Id,
-                Payload = JsonSerializer.Serialize(record, JsonOpts)
-            });
-            var path = $"/SpectrumBookings(PartitionKey='BOOKING',RowKey='{Uri.EscapeDataString(record.Id)}')";
-            using var req = CreateTableRequest(HttpMethod.Put, path, payloadJson);
-            await client.SendAsync(req);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to persist booking {Id} to Table Storage.", record.Id);
-        }
-    }
-
-    public async Task<BookingRecord?> GetAsync(string id)
-    {
-        if (HasTableStorage)
-        {
-            await EnsureTableAsync();
-            try
-            {
-                var client = _httpClientFactory.CreateClient();
-                var path = $"/SpectrumBookings(PartitionKey='BOOKING',RowKey='{Uri.EscapeDataString(id)}')";
-                using var req = CreateTableRequest(HttpMethod.Get, path);
-                using var resp = await client.SendAsync(req);
-                if (resp.IsSuccessStatusCode)
-                {
-                    using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
-                    if (doc.RootElement.TryGetProperty("Payload", out var p))
-                    {
-                        var rec = JsonSerializer.Deserialize<BookingRecord>(p.GetString() ?? "{}", JsonOpts);
-                        if (rec is not null)
-                        {
-                            _memory[rec.Id] = rec;
-                            return rec;
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to read booking {Id} from Table Storage.", id);
+                int idx = part.IndexOf('=');
+                if (idx <= 0) continue;
+                string k = part[..idx].Trim();
+                string v = part[(idx + 1)..].Trim();
+                if (k.Equals("AccountEndpoint", StringComparison.OrdinalIgnoreCase))
+                    endpoint = v.TrimEnd('/');
+                else if (k.Equals("AccountKey", StringComparison.OrdinalIgnoreCase))
+                    key = v;
             }
         }
 
-        return _memory.TryGetValue(id, out var mem) ? mem : null;
-    }
-
-    public async Task<List<BookingRecord>> ListAsync()
-    {
-        if (HasTableStorage)
-        {
-            await EnsureTableAsync();
-            try
-            {
-                var client = _httpClientFactory.CreateClient();
-                using var req = CreateTableRequest(HttpMethod.Get, "/SpectrumBookings()?$filter=PartitionKey%20eq%20'BOOKING'");
-                using var resp = await client.SendAsync(req);
-                if (resp.IsSuccessStatusCode)
-                {
-                    using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
-                    if (doc.RootElement.TryGetProperty("value", out var arr) && arr.ValueKind == JsonValueKind.Array)
-                    {
-                        var list = new List<BookingRecord>();
-                        foreach (var item in arr.EnumerateArray())
-                        {
-                            if (item.TryGetProperty("Payload", out var p))
-                            {
-                                var rec = JsonSerializer.Deserialize<BookingRecord>(p.GetString() ?? "{}", JsonOpts);
-                                if (rec is not null)
-                                {
-                                    _memory[rec.Id] = rec;
-                                    list.Add(rec);
-                                }
-                            }
-                        }
-                        return list.OrderByDescending(r => r.CreatedAt).ToList();
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to list bookings from Table Storage.");
-            }
-        }
-
-        return _memory.Values.OrderByDescending(r => r.CreatedAt).ToList();
+        return !string.IsNullOrWhiteSpace(endpoint) && !string.IsNullOrWhiteSpace(key);
     }
 
     public static (bool IsOpen, string Note, string[] Slots) GetStudioSchedule(DateOnly date)
     {
+        if (date.DayOfWeek is DayOfWeek.Monday or DayOfWeek.Tuesday)
+            return (false, "Studio is closed Mondays & Tuesdays. Please select Wednesday–Sunday.", []);
+
         return date.DayOfWeek switch
         {
-            DayOfWeek.Monday or DayOfWeek.Tuesday =>
-                (false, "Studio is closed Mondays & Tuesdays. Please select Wednesday–Sunday.", []),
-            DayOfWeek.Saturday =>
-                (true, "Saturday Hours: 10:00 AM – 4:00 PM", ["10:00 AM", "11:30 AM", "1:00 PM", "2:30 PM"]),
-            DayOfWeek.Sunday =>
-                (true, "Sunday Hours: 10:00 AM – 3:00 PM", ["10:00 AM", "11:30 AM", "1:00 PM"]),
-            _ =>
-                (true, "Studio Hours: 10:00 AM – 6:00 PM", ["10:00 AM", "11:30 AM", "1:00 PM", "2:30 PM", "4:00 PM"])
+            DayOfWeek.Saturday => (true, "Saturday Hours: 10:00 AM – 4:00 PM", ["10:00 AM", "11:30 AM", "1:00 PM", "2:30 PM"]),
+            DayOfWeek.Sunday => (true, "Sunday Hours: 10:00 AM – 3:00 PM", ["10:00 AM", "11:30 AM", "1:00 PM"]),
+            _ => (true, "Studio Hours: 10:00 AM – 6:00 PM", ["10:00 AM", "11:30 AM", "1:00 PM", "2:30 PM", "4:00 PM"])
         };
+    }
+
+    public async Task<List<BookingRecord>> ListAsync()
+    {
+        if (!_useCosmos)
+            return MemoryFallback.Values.OrderByDescending(b => b.CreatedAt).ToList();
+
+        string resourceLink = $"dbs/{_databaseId}/colls/{ContainerId}";
+        string requestUri = $"{_endpoint}/{resourceLink}/docs";
+        string utcDate = DateTime.UtcNow.ToString("r", CultureInfo.InvariantCulture);
+        string authHeader = GenerateCosmosAuthToken("post", "docs", resourceLink, utcDate, _key);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, requestUri);
+        request.Headers.Add("Authorization", authHeader);
+        request.Headers.Add("x-ms-date", utcDate);
+        request.Headers.Add("x-ms-version", "2018-12-31");
+        request.Headers.Add("x-ms-documentdb-isquery", "True");
+        request.Headers.Add("x-ms-documentdb-query-enablecrosspartition", "True");
+
+        string bodyJson = JsonSerializer.Serialize(new
+        {
+            query = $"SELECT * FROM c WHERE c.businessId = '{PartitionKey}'",
+            parameters = Array.Empty<object>()
+        });
+        request.Content = new StringContent(bodyJson, Encoding.UTF8, "application/query+json");
+        request.Content.Headers.ContentType!.CharSet = null;
+
+        var response = await _http.SendAsync(request);
+        if (!response.IsSuccessStatusCode)
+        {
+            string err = await response.Content.ReadAsStringAsync();
+            _logger.LogWarning("Cosmos query returned {Status}: {Error}", response.StatusCode, err);
+            return [];
+        }
+
+        using var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        if (doc.RootElement.TryGetProperty("Documents", out var docsElem))
+        {
+            var list = JsonSerializer.Deserialize<List<BookingRecord>>(docsElem.GetRawText(), JsonOpts) ?? [];
+            return list.OrderByDescending(b => b.CreatedAt).ToList();
+        }
+
+        return [];
+    }
+
+    public async Task<BookingRecord?> GetAsync(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return null;
+        var cleanId = id.Trim();
+
+        if (!_useCosmos)
+            return MemoryFallback.TryGetValue(cleanId, out var mem) ? mem : null;
+
+        var all = await ListAsync();
+        return all.FirstOrDefault(b => string.Equals(b.Id, cleanId, StringComparison.OrdinalIgnoreCase));
+    }
+
+    public async Task<(bool Ok, string Error)> UpsertAsync(BookingRecord record)
+    {
+        record.BusinessId = PartitionKey;
+        record.UpdatedAt = DateTimeOffset.UtcNow;
+
+        if (!_useCosmos)
+        {
+            MemoryFallback[record.Id] = record;
+            return (true, string.Empty);
+        }
+
+        string resourceLink = $"dbs/{_databaseId}/colls/{ContainerId}";
+        string requestUri = $"{_endpoint}/{resourceLink}/docs";
+        string utcDate = DateTime.UtcNow.ToString("r", CultureInfo.InvariantCulture);
+        string authHeader = GenerateCosmosAuthToken("post", "docs", resourceLink, utcDate, _key);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, requestUri);
+        request.Headers.Add("Authorization", authHeader);
+        request.Headers.Add("x-ms-date", utcDate);
+        request.Headers.Add("x-ms-version", "2018-12-31");
+        request.Headers.Add("x-ms-documentdb-is-upsert", "True");
+        request.Headers.Add("x-ms-documentdb-partitionkey", JsonSerializer.Serialize(new[] { PartitionKey }));
+        request.Content = new StringContent(JsonSerializer.Serialize(record, JsonOpts), Encoding.UTF8, "application/json");
+
+        var response = await _http.SendAsync(request);
+        if (response.IsSuccessStatusCode)
+            return (true, string.Empty);
+
+        string err = await response.Content.ReadAsStringAsync();
+        _logger.LogError("Cosmos upsert failed with {Status}: {Error}", response.StatusCode, err);
+        return (false, $"Database write failed ({(int)response.StatusCode}).");
+    }
+
+    private static string GenerateCosmosAuthToken(
+        string verb,
+        string resourceType,
+        string resourceId,
+        string utcDate,
+        string masterKeyBase64)
+    {
+        byte[] keyBytes = Convert.FromBase64String(masterKeyBase64);
+        string payload = $"{verb.ToLowerInvariant()}\n{resourceType.ToLowerInvariant()}\n{resourceId}\n{utcDate.ToLowerInvariant()}\n\n";
+        using var hmac = new HMACSHA256(keyBytes);
+        byte[] hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(payload));
+        string signature = Convert.ToBase64String(hash);
+        return Uri.EscapeDataString($"type=master&ver=1.0&sig={signature}");
     }
 }
