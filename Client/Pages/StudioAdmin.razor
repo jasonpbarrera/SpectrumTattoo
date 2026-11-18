@@ -128,7 +128,7 @@
                                     </button>
                                 }
                                 <a href="/book?bookingId=@b.Id" class="btn btn-outline btn-sm">Client Status Link</a>
-                                <a href="/api/booking-ics?id=@b.Id" class="btn btn-outline btn-sm">.ics Calendar</a>
+                                <a href="/api/bookings?op=ics&id=@b.Id" class="btn btn-outline btn-sm">.ics Calendar</a>
                             </div>
                         </article>
                     }
@@ -219,9 +219,9 @@
     {
         var dollars = _depositDollars.TryGetValue(id, out var d) && d >= 10 ? d : 50;
         var note = _notes.TryGetValue(id, out var n) ? n : null;
-        using var req = new HttpRequestMessage(HttpMethod.Post, "api/booking-action")
+        using var req = new HttpRequestMessage(HttpMethod.Post, "api/bookings")
         {
-            Content = JsonContent.Create(new { id, action = "approve", artistNote = note, depositAmountCents = dollars * 100 })
+            Content = JsonContent.Create(new { id, op = "approve", artistNote = note, depositAmountCents = dollars * 100 })
         };
         req.Headers.Add("X-Studio-Pin", _pin.Trim());
         await Http.SendAsync(req);
@@ -230,9 +230,9 @@
 
     private async Task ConfirmManualAsync(string id)
     {
-        using var req = new HttpRequestMessage(HttpMethod.Post, "api/booking-action")
+        using var req = new HttpRequestMessage(HttpMethod.Post, "api/bookings")
         {
-            Content = JsonContent.Create(new { id, action = "confirm-manual" })
+            Content = JsonContent.Create(new { id, op = "confirm-manual" })
         };
         req.Headers.Add("X-Studio-Pin", _pin.Trim());
         await Http.SendAsync(req);
@@ -242,9 +242,9 @@
     private async Task DeclineAsync(string id)
     {
         var note = _notes.TryGetValue(id, out var n) ? n : null;
-        using var req = new HttpRequestMessage(HttpMethod.Post, "api/booking-action")
+        using var req = new HttpRequestMessage(HttpMethod.Post, "api/bookings")
         {
-            Content = JsonContent.Create(new { id, action = "decline", artistNote = note })
+            Content = JsonContent.Create(new { id, op = "decline", artistNote = note })
         };
         req.Headers.Add("X-Studio-Pin", _pin.Trim());
         await Http.SendAsync(req);

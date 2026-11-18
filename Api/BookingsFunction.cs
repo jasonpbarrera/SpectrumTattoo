@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging;
 
 namespace SpectrumTattoo.Api;
 
-public sealed class BookingsFunction(
+public class BookingsFunction(
     IHttpClientFactory httpClientFactory,
     ILogger<BookingsFunction> logger)
 {
@@ -22,22 +22,20 @@ public sealed class BookingsFunction(
 
     private BookingStore CreateStore() => new(httpClientFactory, logger);
 
-    public sealed record CreateBookingRequest(
-        string Artist,
-        string Date,
-        string TimeSlot,
-        string ServiceType,
-        string Name,
-        string Phone,
-        string Email,
-        string Placement,
-        string IdeaDescription);
-
-    public sealed record BookingActionRequest(
-        string Id,
-        string Action,
+    public sealed record BookingPostPayload(
+        string? Op,
+        string? Id,
         string? ArtistNote,
-        int? DepositAmountCents);
+        int? DepositAmountCents,
+        string? Artist,
+        string? Date,
+        string? TimeSlot,
+        string? ServiceType,
+        string? Name,
+        string? Phone,
+        string? Email,
+        string? Placement,
+        string? IdeaDescription);
 
     private static string GetAdminPin() =>
         Environment.GetEnvironmentVariable("STUDIO_ADMIN_PIN") ?? "4110";
@@ -73,70 +71,106 @@ public sealed class BookingsFunction(
         return dict;
     }
 
-    [Function("GetAvailability")]
-    public async Task<HttpResponseData> GetAvailability(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "availability")] HttpRequestData req)
-    {
-        var query = ParseQuery(req.Url.Query);
-        var artist = (query.TryGetValue("artist", out var a) ? a : "First Available Artist").Trim();
-        var dateStr = (query.TryGetValue("date", out var d) ? d : string.Empty).Trim();
-
-        if (!DateOnly.TryParseExact(dateStr, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
-        {
-            var bad = req.CreateResponse(HttpStatusCode.BadRequest);
-            await bad.WriteAsJsonAsync(new { ok = false, error = "Invalid date format. Expected yyyy-MM-dd." });
-            return bad;
-        }
-
-        var store = CreateStore();
-        var (isOpen, note, slots) = BookingStore.GetStudioSchedule(date);
-        var allBookings = await store.ListAsync();
-
-        var takenSlots = allBookings
-            .Where(b => string.Equals(b.Date, dateStr, StringComparison.OrdinalIgnoreCase)
-                        && (string.Equals(b.Artist, artist, StringComparison.OrdinalIgnoreCase)
-                            || string.Equals(artist, "First Available Artist", StringComparison.OrdinalIgnoreCase))
-                        && (b.Status == "Confirmed" || b.Status == "ApprovedAwaitingDeposit"))
-            .ToDictionary(b => b.TimeSlot, b => b.Status, StringComparer.OrdinalIgnoreCase);
-
-        var pendingCounts = allBookings
-            .Where(b => string.Equals(b.Date, dateStr, StringComparison.OrdinalIgnoreCase)
-                        && string.Equals(b.Artist, artist, StringComparison.OrdinalIgnoreCase)
-                        && b.Status == "PendingApproval")
-            .GroupBy(b => b.TimeSlot, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
-
-        var slotList = slots.Select(s => new
-        {
-            time = s,
-            available = !takenSlots.ContainsKey(s),
-            pendingRequests = pendingCounts.TryGetValue(s, out var c) ? c : 0
-        });
-
-        var ok = req.CreateResponse(HttpStatusCode.OK);
-        await ok.WriteAsJsonAsync(new
-        {
-            ok = true,
-            date = dateStr,
-            artist,
-            isOpen,
-            note,
-            depositAmountCents = GetDefaultDepositCents(),
-            stripeConfigured = IsStripeConfigured(),
-            slots = slotList
-        });
-        return ok;
-    }
-
-    [Function("BookingsEndpoint")]
-    public async Task<HttpResponseData> BookingsCollection(
+    [Function("Bookings")]
+    public async Task<HttpResponseData> HandleBookings(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", "post", Route = "bookings")] HttpRequestData req)
     {
         var store = CreateStore();
+        var query = ParseQuery(req.Url.Query);
 
         if (string.Equals(req.Method, "GET", StringComparison.OrdinalIgnoreCase))
         {
-            var query = ParseQuery(req.Url.Query);
+            var op = query.TryGetValue("op", out var opVal) ? opVal.Trim().ToLowerInvariant() : string.Empty;
+
+            if (op == "availability")
+            {
+                var artist = (query.TryGetValue("artist", out var a) ? a : "First Available Artist").Trim();
+                var dateStr = (query.TryGetValue("date", out var d) ? d : string.Empty).Trim();
+
+                if (!DateOnly.TryParseExact(dateStr, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
+                {
+                    var bad = req.CreateResponse(HttpStatusCode.BadRequest);
+                    await bad.WriteAsJsonAsync(new { ok = false, error = "Invalid date format. Expected yyyy-MM-dd." });
+                    return bad;
+                }
+
+                var (isOpen, note, slots) = BookingStore.GetStudioSchedule(date);
+                var allBookings = await store.ListAsync();
+
+                var takenSlots = allBookings
+                    .Where(b => string.Equals(b.Date, dateStr, StringComparison.OrdinalIgnoreCase)
+                                && (string.Equals(b.Artist, artist, StringComparison.OrdinalIgnoreCase)
+                                    || string.Equals(artist, "First Available Artist", StringComparison.OrdinalIgnoreCase))
+                                && (b.Status == "Confirmed" || b.Status == "ApprovedAwaitingDeposit"))
+                    .ToDictionary(b => b.TimeSlot, b => b.Status, StringComparer.OrdinalIgnoreCase);
+
+                var pendingCounts = allBookings
+                    .Where(b => string.Equals(b.Date, dateStr, StringComparison.OrdinalIgnoreCase)
+                                && string.Equals(b.Artist, artist, StringComparison.OrdinalIgnoreCase)
+                                && b.Status == "PendingApproval")
+                    .GroupBy(b => b.TimeSlot, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+
+                var slotList = slots.Select(s => new
+                {
+                    time = s,
+                    available = !takenSlots.ContainsKey(s),
+                    pendingRequests = pendingCounts.TryGetValue(s, out var c) ? c : 0
+                });
+
+                var availOk = req.CreateResponse(HttpStatusCode.OK);
+                await availOk.WriteAsJsonAsync(new
+                {
+                    ok = true,
+                    date = dateStr,
+                    artist,
+                    isOpen,
+                    note,
+                    depositAmountCents = GetDefaultDepositCents(),
+                    stripeConfigured = IsStripeConfigured(),
+                    slots = slotList
+                });
+                return availOk;
+            }
+
+            if (op == "ics")
+            {
+                if (!query.TryGetValue("id", out var icsId) || string.IsNullOrWhiteSpace(icsId))
+                    return req.CreateResponse(HttpStatusCode.BadRequest);
+
+                var b = await store.GetAsync(icsId.Trim());
+                if (b is null)
+                    return req.CreateResponse(HttpStatusCode.NotFound);
+
+                DateTime.TryParseExact($"{b.Date} {b.TimeSlot}", "yyyy-MM-dd h:mm tt",
+                    CultureInfo.InvariantCulture, DateTimeStyles.None, out var startLocal);
+                if (startLocal == default)
+                    startLocal = DateTime.UtcNow.AddDays(1);
+
+                var endLocal = startLocal.AddMinutes(90);
+                var ics = new StringBuilder()
+                    .AppendLine("BEGIN:VCALENDAR")
+                    .AppendLine("VERSION:2.0")
+                    .AppendLine("PRODID:-//Spectrum Tattoo//Booking//EN")
+                    .AppendLine("BEGIN:VEVENT")
+                    .AppendLine($"UID:{b.Id}@spectrumtattoo")
+                    .AppendLine($"DTSTAMP:{DateTime.UtcNow:yyyyMMddTHHmmssZ}")
+                    .AppendLine($"DTSTART:{startLocal:yyyyMMddTHHmmss}")
+                    .AppendLine($"DTEND:{endLocal:yyyyMMddTHHmmss}")
+                    .AppendLine($"SUMMARY:Spectrum Tattoo - {b.ServiceType} ({b.Artist})")
+                    .AppendLine($"DESCRIPTION:Booking {b.Id} | Status: {b.Status} | (423) 299-9111")
+                    .AppendLine("LOCATION:6165 US-411\\, Benton\\, TN 37307")
+                    .AppendLine("END:VEVENT")
+                    .AppendLine("END:VCALENDAR")
+                    .ToString();
+
+                var icsResp = req.CreateResponse(HttpStatusCode.OK);
+                icsResp.Headers.Add("Content-Type", "text/calendar; charset=utf-8");
+                icsResp.Headers.Add("Content-Disposition", $"attachment; filename=\"spectrum-tattoo-{b.Id}.ics\"");
+                await icsResp.WriteStringAsync(ics);
+                return icsResp;
+            }
+
             if (query.TryGetValue("id", out var lookupId) && !string.IsNullOrWhiteSpace(lookupId))
             {
                 var single = await store.GetAsync(lookupId.Trim());
@@ -164,7 +198,7 @@ public sealed class BookingsFunction(
                         single.DepositPaid,
                         single.StripeCheckoutUrl,
                         single.ArtistNote,
-                        icsUrl = $"/api/booking-ics?id={single.Id}"
+                        icsUrl = $"/api/bookings?op=ics&id={single.Id}"
                     },
                     stripeConfigured = IsStripeConfigured()
                 });
@@ -190,10 +224,11 @@ public sealed class BookingsFunction(
             return listOk;
         }
 
-        CreateBookingRequest? payload;
+        // POST: either admin action (op = approve | confirm-manual | decline) or new booking request
+        BookingPostPayload? payload;
         try
         {
-            payload = await JsonSerializer.DeserializeAsync<CreateBookingRequest>(req.Body, JsonOpts);
+            payload = await JsonSerializer.DeserializeAsync<BookingPostPayload>(req.Body, JsonOpts);
         }
         catch
         {
@@ -202,8 +237,76 @@ public sealed class BookingsFunction(
             return bad;
         }
 
-        if (payload is null
-            || string.IsNullOrWhiteSpace(payload.Name)
+        if (payload is null)
+        {
+            var bad = req.CreateResponse(HttpStatusCode.BadRequest);
+            await bad.WriteAsJsonAsync(new { ok = false, error = "Empty payload." });
+            return bad;
+        }
+
+        var postOp = payload.Op?.Trim().ToLowerInvariant();
+        if (postOp is "approve" or "confirm-manual" or "decline")
+        {
+            if (!IsAuthorized(req))
+            {
+                var unauth = req.CreateResponse(HttpStatusCode.Unauthorized);
+                await unauth.WriteAsJsonAsync(new { ok = false, error = "Invalid studio PIN." });
+                return unauth;
+            }
+
+            if (string.IsNullOrWhiteSpace(payload.Id))
+            {
+                var bad = req.CreateResponse(HttpStatusCode.BadRequest);
+                await bad.WriteAsJsonAsync(new { ok = false, error = "Booking id is required." });
+                return bad;
+            }
+
+            var target = await store.GetAsync(payload.Id.Trim());
+            if (target is null)
+            {
+                var notFound = req.CreateResponse(HttpStatusCode.NotFound);
+                await notFound.WriteAsJsonAsync(new { ok = false, error = "Booking not found." });
+                return notFound;
+            }
+
+            if (!string.IsNullOrWhiteSpace(payload.ArtistNote))
+                target.ArtistNote = payload.ArtistNote.Trim();
+
+            if (postOp == "approve")
+            {
+                if (payload.DepositAmountCents is > 0)
+                    target.DepositAmountCents = payload.DepositAmountCents.Value;
+
+                target.Status = "ApprovedAwaitingDeposit";
+                var stripeSecret = Environment.GetEnvironmentVariable("STRIPE_SECRET_KEY");
+                if (!string.IsNullOrWhiteSpace(stripeSecret))
+                {
+                    var baseUrl = $"{req.Url.Scheme}://{req.Url.Authority}";
+                    var session = await CreateStripeCheckoutSessionAsync(stripeSecret, target, baseUrl);
+                    if (session is not null)
+                    {
+                        target.StripeSessionId = session.Value.SessionId;
+                        target.StripeCheckoutUrl = session.Value.CheckoutUrl;
+                    }
+                }
+            }
+            else if (postOp == "confirm-manual")
+            {
+                target.DepositPaid = true;
+                target.Status = "Confirmed";
+            }
+            else
+            {
+                target.Status = "Declined";
+            }
+
+            await store.SaveAsync(target);
+            var actionOk = req.CreateResponse(HttpStatusCode.OK);
+            await actionOk.WriteAsJsonAsync(new { ok = true, stripeConfigured = IsStripeConfigured(), booking = target });
+            return actionOk;
+        }
+
+        if (string.IsNullOrWhiteSpace(payload.Name)
             || string.IsNullOrWhiteSpace(payload.Phone)
             || string.IsNullOrWhiteSpace(payload.Email)
             || string.IsNullOrWhiteSpace(payload.Date)
@@ -221,20 +324,20 @@ public sealed class BookingsFunction(
             return bad;
         }
 
-        var (isOpen, note, validSlots) = BookingStore.GetStudioSchedule(parsedDate);
-        if (!isOpen || !validSlots.Contains(payload.TimeSlot, StringComparer.OrdinalIgnoreCase))
+        var (open, schedNote, validSlots) = BookingStore.GetStudioSchedule(parsedDate);
+        if (!open || !validSlots.Contains(payload.TimeSlot, StringComparer.OrdinalIgnoreCase))
         {
             var bad = req.CreateResponse(HttpStatusCode.BadRequest);
-            await bad.WriteAsJsonAsync(new { ok = false, error = note });
+            await bad.WriteAsJsonAsync(new { ok = false, error = schedNote });
             return bad;
         }
 
-        var artist = string.IsNullOrWhiteSpace(payload.Artist) ? "First Available Artist" : payload.Artist.Trim();
+        var reqArtist = string.IsNullOrWhiteSpace(payload.Artist) ? "First Available Artist" : payload.Artist.Trim();
         var existing = await store.ListAsync();
         var conflict = existing.Any(b =>
             string.Equals(b.Date, payload.Date, StringComparison.OrdinalIgnoreCase)
             && string.Equals(b.TimeSlot, payload.TimeSlot, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(b.Artist, artist, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(b.Artist, reqArtist, StringComparison.OrdinalIgnoreCase)
             && (b.Status == "Confirmed" || b.Status == "ApprovedAwaitingDeposit"));
 
         if (conflict)
@@ -248,7 +351,7 @@ public sealed class BookingsFunction(
         var record = new BookingRecord
         {
             Id = shortCode,
-            Artist = artist,
+            Artist = reqArtist,
             Date = payload.Date,
             TimeSlot = payload.TimeSlot,
             ServiceType = string.IsNullOrWhiteSpace(payload.ServiceType) ? "Custom Tattoo" : payload.ServiceType.Trim(),
@@ -273,91 +376,8 @@ public sealed class BookingsFunction(
         {
             ok = true,
             booking = record,
-            icsUrl = $"/api/booking-ics?id={record.Id}"
+            icsUrl = $"/api/bookings?op=ics&id={record.Id}"
         });
-        return ok;
-    }
-
-    [Function("BookingAction")]
-    public async Task<HttpResponseData> BookingAction(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "booking-action")] HttpRequestData req)
-    {
-        if (!IsAuthorized(req))
-        {
-            var unauth = req.CreateResponse(HttpStatusCode.Unauthorized);
-            await unauth.WriteAsJsonAsync(new { ok = false, error = "Invalid studio PIN." });
-            return unauth;
-        }
-
-        BookingActionRequest? payload;
-        try
-        {
-            payload = await JsonSerializer.DeserializeAsync<BookingActionRequest>(req.Body, JsonOpts);
-        }
-        catch
-        {
-            var bad = req.CreateResponse(HttpStatusCode.BadRequest);
-            await bad.WriteAsJsonAsync(new { ok = false, error = "Invalid action payload." });
-            return bad;
-        }
-
-        if (payload is null || string.IsNullOrWhiteSpace(payload.Id) || string.IsNullOrWhiteSpace(payload.Action))
-        {
-            var bad = req.CreateResponse(HttpStatusCode.BadRequest);
-            await bad.WriteAsJsonAsync(new { ok = false, error = "Booking id and action are required." });
-            return bad;
-        }
-
-        var store = CreateStore();
-        var booking = await store.GetAsync(payload.Id.Trim());
-        if (booking is null)
-        {
-            var notFound = req.CreateResponse(HttpStatusCode.NotFound);
-            await notFound.WriteAsJsonAsync(new { ok = false, error = "Booking not found." });
-            return notFound;
-        }
-
-        if (!string.IsNullOrWhiteSpace(payload.ArtistNote))
-            booking.ArtistNote = payload.ArtistNote.Trim();
-
-        switch (payload.Action.Trim().ToLowerInvariant())
-        {
-            case "approve":
-                if (payload.DepositAmountCents is > 0)
-                    booking.DepositAmountCents = payload.DepositAmountCents.Value;
-
-                booking.Status = "ApprovedAwaitingDeposit";
-                var stripeSecret = Environment.GetEnvironmentVariable("STRIPE_SECRET_KEY");
-                if (!string.IsNullOrWhiteSpace(stripeSecret))
-                {
-                    var baseUrl = $"{req.Url.Scheme}://{req.Url.Authority}";
-                    var session = await CreateStripeCheckoutSessionAsync(stripeSecret, booking, baseUrl);
-                    if (session is not null)
-                    {
-                        booking.StripeSessionId = session.Value.SessionId;
-                        booking.StripeCheckoutUrl = session.Value.CheckoutUrl;
-                    }
-                }
-                break;
-
-            case "confirm-manual":
-                booking.DepositPaid = true;
-                booking.Status = "Confirmed";
-                break;
-
-            case "decline":
-                booking.Status = "Declined";
-                break;
-
-            default:
-                var bad = req.CreateResponse(HttpStatusCode.BadRequest);
-                await bad.WriteAsJsonAsync(new { ok = false, error = "Unsupported action." });
-                return bad;
-        }
-
-        await store.SaveAsync(booking);
-        var ok = req.CreateResponse(HttpStatusCode.OK);
-        await ok.WriteAsJsonAsync(new { ok = true, stripeConfigured = IsStripeConfigured(), booking });
         return ok;
     }
 
@@ -416,48 +436,6 @@ public sealed class BookingsFunction(
         var ok = req.CreateResponse(HttpStatusCode.OK);
         await ok.WriteAsJsonAsync(new { received = true });
         return ok;
-    }
-
-    [Function("DownloadBookingIcs")]
-    public async Task<HttpResponseData> DownloadIcs(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "booking-ics")] HttpRequestData req)
-    {
-        var query = ParseQuery(req.Url.Query);
-        if (!query.TryGetValue("id", out var id) || string.IsNullOrWhiteSpace(id))
-            return req.CreateResponse(HttpStatusCode.BadRequest);
-
-        var store = CreateStore();
-        var booking = await store.GetAsync(id.Trim());
-        if (booking is null)
-            return req.CreateResponse(HttpStatusCode.NotFound);
-
-        DateTime.TryParseExact($"{booking.Date} {booking.TimeSlot}", "yyyy-MM-dd h:mm tt",
-            CultureInfo.InvariantCulture, DateTimeStyles.None, out var startLocal);
-        if (startLocal == default)
-            startLocal = DateTime.UtcNow.AddDays(1);
-
-        var endLocal = startLocal.AddMinutes(90);
-        var ics = new StringBuilder()
-            .AppendLine("BEGIN:VCALENDAR")
-            .AppendLine("VERSION:2.0")
-            .AppendLine("PRODID:-//Spectrum Tattoo//Booking//EN")
-            .AppendLine("BEGIN:VEVENT")
-            .AppendLine($"UID:{booking.Id}@spectrumtattoo")
-            .AppendLine($"DTSTAMP:{DateTime.UtcNow:yyyyMMddTHHmmssZ}")
-            .AppendLine($"DTSTART:{startLocal:yyyyMMddTHHmmss}")
-            .AppendLine($"DTEND:{endLocal:yyyyMMddTHHmmss}")
-            .AppendLine($"SUMMARY:Spectrum Tattoo - {booking.ServiceType} ({booking.Artist})")
-            .AppendLine($"DESCRIPTION:Booking {booking.Id} | Status: {booking.Status} | (423) 299-9111")
-            .AppendLine("LOCATION:6165 US-411\\, Benton\\, TN 37307")
-            .AppendLine("END:VEVENT")
-            .AppendLine("END:VCALENDAR")
-            .ToString();
-
-        var resp = req.CreateResponse(HttpStatusCode.OK);
-        resp.Headers.Add("Content-Type", "text/calendar; charset=utf-8");
-        resp.Headers.Add("Content-Disposition", $"attachment; filename=\"spectrum-tattoo-{booking.Id}.ics\"");
-        await resp.WriteStringAsync(ics);
-        return resp;
     }
 
     private async Task<(string SessionId, string CheckoutUrl)?> CreateStripeCheckoutSessionAsync(
