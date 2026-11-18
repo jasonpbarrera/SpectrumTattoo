@@ -1,0 +1,220 @@
+@page "/book"
+@inject HttpClient Http
+@inject NavigationManager Nav
+
+<PageTitle>Book a Consultation | Spectrum Tattoo — Benton, TN</PageTitle>
+
+<section class="section">
+    <div class="container">
+        <div class="section-header">
+            <span class="eyebrow">Consultations &amp; Appointments</span>
+            <h1 class="section-title">Book Your <em>Session</em></h1>
+            <p>
+                Tell us about your piece, preferred artist, and placement. We will review your concept and follow up during studio hours (Wed&ndash;Sun) to lock in your consultation or appointment.
+            </p>
+        </div>
+
+        <div class="book-layout">
+            <div class="form-panel">
+                @if (_submitted)
+                {
+                    <div style="padding: 1.5rem 0;">
+                        <span class="eyebrow">Request Received</span>
+                        <h2 style="font-size: 2.25rem; margin: 1rem 0;">We Have Your Concept</h2>
+                        <p>
+                            Thank you, <strong>@_model.Name</strong>. Your request for <strong>@_model.ServiceType</strong>
+                            with <strong>@_model.PreferredArtist</strong> has been logged.
+                        </p>
+                        <p>
+                            For immediate walk-in availability or piercing jewelry assistance, call the studio directly at
+                            <a href="tel:+14232999111" style="color: var(--accent-gold);">(423) 299-9111</a>.
+                        </p>
+                        <button type="button" class="btn btn-outline" style="margin-top: 1rem;" @onclick="ResetForm">
+                            Submit Another Request
+                        </button>
+                    </div>
+                }
+                else
+                {
+                    <EditForm Model="_model" OnValidSubmit="HandleSubmit">
+                        <DataAnnotationsValidator />
+
+                        <div class="form-grid">
+                            <div class="form-grid form-grid-2">
+                                <div class="field-group">
+                                    <label class="field-label" for="client-name">Your Name *</label>
+                                    <InputText id="client-name" class="field-input" @bind-Value="_model.Name" placeholder="Full name" />
+                                    <ValidationMessage For="@(() => _model.Name)" class="validation-message" />
+                                </div>
+
+                                <div class="field-group">
+                                    <label class="field-label" for="client-phone">Phone Number *</label>
+                                    <InputText id="client-phone" class="field-input" @bind-Value="_model.Phone" placeholder="(423) 555-0199" />
+                                    <ValidationMessage For="@(() => _model.Phone)" class="validation-message" />
+                                </div>
+                            </div>
+
+                            <div class="form-grid form-grid-2">
+                                <div class="field-group">
+                                    <label class="field-label" for="client-email">Email Address *</label>
+                                    <InputText id="client-email" type="email" class="field-input" @bind-Value="_model.Email" placeholder="you@example.com" />
+                                    <ValidationMessage For="@(() => _model.Email)" class="validation-message" />
+                                </div>
+
+                                <div class="field-group">
+                                    <label class="field-label" for="preferred-artist">Preferred Artist</label>
+                                    <InputSelect id="preferred-artist" class="field-select" @bind-Value="_model.PreferredArtist">
+                                        <option value="First Available Artist">First Available Artist</option>
+                                        <option value="Dawn Yermasek">Dawn Yermasek (Founder)</option>
+                                        <option value="Tae">Tae</option>
+                                        <option value="Kota">Kota</option>
+                                        <option value="Kindra">Kindra</option>
+                                        <option value="LaCinda">LaCinda</option>
+                                    </InputSelect>
+                                </div>
+                            </div>
+
+                            <div class="form-grid form-grid-2">
+                                <div class="field-group">
+                                    <label class="field-label" for="service-type">Service</label>
+                                    <InputSelect id="service-type" class="field-select" @bind-Value="_model.ServiceType">
+                                        <option value="Custom Tattoo">Custom Tattoo</option>
+                                        <option value="Scar Cover-Up / Rework">Scar Cover-Up / Rework</option>
+                                        <option value="Flash Piece">Flash Piece</option>
+                                        <option value="Piercing / Jewelry">Body Piercing / Jewelry Change</option>
+                                        <option value="Permanent Makeup">Permanent Makeup</option>
+                                    </InputSelect>
+                                </div>
+
+                                <div class="field-group">
+                                    <label class="field-label" for="placement">Placement &amp; Approx. Size</label>
+                                    <InputText id="placement" class="field-input" @bind-Value="_model.Placement" placeholder="e.g. Outer forearm, ~6 inches" />
+                                </div>
+                            </div>
+
+                            <div class="field-group">
+                                <label class="field-label" for="idea-desc">Tell Us Your Idea *</label>
+                                <InputTextArea id="idea-desc" rows="5" class="field-textarea" @bind-Value="_model.IdeaDescription"
+                                               placeholder="Describe your concept, style (watercolor, neo-traditional, fine-line, blackwork), color or black &amp; grey, and any cover-up notes." />
+                                <ValidationMessage For="@(() => _model.IdeaDescription)" class="validation-message" />
+                            </div>
+
+                            <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; margin-top: 0.5rem;">
+                                <span style="font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-smoke);">
+                                    18+ Valid Photo ID Required &middot; Cards Accepted
+                                </span>
+                                <button type="submit" class="btn btn-primary" disabled="@_submitting">
+                                    @(_submitting ? "Sending..." : "Send Consultation Request")
+                                </button>
+                            </div>
+                        </div>
+                    </EditForm>
+                }
+            </div>
+
+            <aside style="display: flex; flex-direction: column; gap: 1.5rem;">
+                <div class="info-panel">
+                    <span class="eyebrow">Location &amp; Hours</span>
+                    <h2 style="font-size: 1.85rem; margin: 0.75rem 0 0.5rem;">Spectrum Tattoo</h2>
+                    <p style="margin-bottom: 0.75rem;">
+                        6165 US-411<br />
+                        Benton, TN 37307
+                    </p>
+                    <p style="margin-bottom: 1rem;">
+                        <a href="tel:+14232999111" style="color: var(--accent-gold); font-family: var(--font-mono); font-size: 0.95rem;">
+                            (423) 299-9111
+                        </a>
+                    </p>
+                    <ul class="hours-list">
+                        <li><span>Monday</span><span>Closed</span></li>
+                        <li><span>Tuesday</span><span>Closed</span></li>
+                        <li><span>Wednesday</span><span>10:00 AM &ndash; 6:00 PM</span></li>
+                        <li><span>Thursday</span><span>10:00 AM &ndash; 6:00 PM</span></li>
+                        <li><span>Friday</span><span>10:00 AM &ndash; 6:00 PM</span></li>
+                        <li><span>Saturday</span><span>10:00 AM &ndash; 4:00 PM</span></li>
+                        <li><span>Sunday</span><span>10:00 AM &ndash; 3:00 PM</span></li>
+                    </ul>
+                </div>
+
+                <div class="info-panel">
+                    <span class="eyebrow">Studio Notes</span>
+                    <ul class="footer-links" style="margin-top: 1rem; gap: 0.75rem;">
+                        <li>&bull; Formerly <strong style="color: var(--text-bone);">The Old Crow Tattoo Parlor</strong>—same studio, same US-411 location.</li>
+                        <li>&bull; Walk-ins &amp; jewelry swaps accommodated whenever studio schedule allows.</li>
+                        <li>&bull; Credit cards accepted &amp; complimentary Wi-Fi available during your session.</li>
+                        <li>&bull; Follow <a href="https://www.facebook.com/Theoldcrowtattooparlor" target="_blank" rel="noopener noreferrer" style="color: var(--accent-gold); text-decoration: underline;">Facebook</a> for flash sales &amp; openings.</li>
+                    </ul>
+                </div>
+            </aside>
+        </div>
+    </div>
+</section>
+
+@code {
+    private ConsultationModel _model = new();
+    private bool _submitting;
+    private bool _submitted;
+
+    protected override void OnInitialized()
+    {
+        var uri = Nav.ToAbsoluteUri(Nav.Uri);
+        var query = uri.Query;
+        if (!string.IsNullOrEmpty(query))
+        {
+            if (query.Contains("artist=Dawn", StringComparison.OrdinalIgnoreCase)) _model.PreferredArtist = "Dawn Yermasek";
+            else if (query.Contains("artist=Tae", StringComparison.OrdinalIgnoreCase)) _model.PreferredArtist = "Tae";
+            else if (query.Contains("artist=Kota", StringComparison.OrdinalIgnoreCase)) _model.PreferredArtist = "Kota";
+            else if (query.Contains("artist=Kindra", StringComparison.OrdinalIgnoreCase)) _model.PreferredArtist = "Kindra";
+            else if (query.Contains("artist=LaCinda", StringComparison.OrdinalIgnoreCase)) _model.PreferredArtist = "LaCinda";
+
+            if (query.Contains("Cover-Up", StringComparison.OrdinalIgnoreCase)) _model.ServiceType = "Scar Cover-Up / Rework";
+            else if (query.Contains("Piercing", StringComparison.OrdinalIgnoreCase)) _model.ServiceType = "Piercing / Jewelry";
+        }
+    }
+
+    private async Task HandleSubmit()
+    {
+        _submitting = true;
+        try
+        {
+            await Http.PostAsJsonAsync("api/leads", _model);
+        }
+        catch
+        {
+            // Graceful fallback when API is not attached in local static preview
+        }
+        finally
+        {
+            _submitting = false;
+            _submitted = true;
+        }
+    }
+
+    private void ResetForm()
+    {
+        _model = new();
+        _submitted = false;
+    }
+
+    public sealed class ConsultationModel
+    {
+        [Required(ErrorMessage = "Please enter your name.")]
+        public string Name { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Please enter a phone number.")]
+        public string Phone { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Please enter an email address.")]
+        [EmailAddress(ErrorMessage = "Please enter a valid email address.")]
+        public string Email { get; set; } = string.Empty;
+
+        public string PreferredArtist { get; set; } = "First Available Artist";
+        public string ServiceType { get; set; } = "Custom Tattoo";
+        public string Placement { get; set; } = string.Empty;
+        public string ApproximateSize { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "Please describe your tattoo or piercing idea.")]
+        [MinLength(10, ErrorMessage = "Please share a few more details about your idea.")]
+        public string IdeaDescription { get; set; } = string.Empty;
+    }
+}

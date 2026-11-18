@@ -1,0 +1,101 @@
+@page "/services"
+
+<PageTitle>Services &amp; Aftercare | Spectrum Tattoo — Benton, TN</PageTitle>
+
+<section class="section">
+    <div class="container">
+        <div class="section-header">
+            <span class="eyebrow">What We Do</span>
+            <h1 class="section-title">Services &amp; <em>Aftercare</em></h1>
+            <p>
+                Every service at Spectrum Tattoo is performed with single-use sterile needles, hospital-grade sanitation, and transparent communication from consultation to healed skin.
+            </p>
+        </div>
+
+        <div class="craft-grid">
+            <article class="craft-card craft-card-featured">
+                <div>
+                    <div class="craft-num">01 &mdash; CUSTOM INK</div>
+                    <h2>Custom Tattoos &amp; Flash</h2>
+                    <p>
+                        Watercolor, neo-traditional, fine-line botanicals, black &amp; grey, pop-culture tributes, and studio flash events. We draw custom pieces tailored to your placement and skin tone.
+                    </p>
+                </div>
+                <NavLink href="/book?service=Custom%20Tattoo" class="btn btn-outline btn-sm">Request Tattoo Consult</NavLink>
+            </article>
+
+            <article class="craft-card">
+                <div>
+                    <div class="craft-num">02 &mdash; RECLAMATION</div>
+                    <h2>Scar Cover-Ups &amp; Reworks</h2>
+                    <p>
+                        Thoughtful, experienced design work to cover surgical or personal scars and breathe new life into older, faded, or unwanted tattoos.
+                    </p>
+                </div>
+                <NavLink href="/book?service=Scar%20Cover-Up%20%2F%20Rework" class="btn btn-outline btn-sm">Discuss a Cover-Up</NavLink>
+            </article>
+
+            <article class="craft-card">
+                <div>
+                    <div class="craft-num">03 &mdash; PIERCING &amp; PMU</div>
+                    <h2>Body Piercing &amp; Permanent Makeup</h2>
+                    <p>
+                        Clean, precise body piercings, troubleshooting and jewelry swaps (including walk-in help when studio flow allows), plus permanent cosmetic artistry.
+                    </p>
+                </div>
+                <NavLink href="/book?service=Piercing%20%2F%20Jewelry" class="btn btn-outline btn-sm">Book Piercing / PMU</NavLink>
+            </article>
+        </div>
+    </div>
+</section>
+
+<section class="section section-velvet">
+    <div class="container" style="max-width: 860px;">
+        <div class="section-header">
+            <span class="eyebrow">Heal Right</span>
+            <h2 class="section-title">Session Prep &amp; <em>Aftercare</em></h2>
+            <p>Your artist will send you home with tailored instructions. Here is our studio baseline for crisp, vibrant healing.</p>
+        </div>
+
+        <div>
+            @foreach (var item in _aftercareItems)
+            {
+                var isOpen = _openIndex == item.Id;
+                <div class="aftercare-item">
+                    <button type="button" class="aftercare-trigger" @onclick="() => Toggle(item.Id)" aria-expanded="@isOpen">
+                        @item.Title
+                        <span>@(isOpen ? "−" : "+")</span>
+                    </button>
+                    @if (isOpen)
+                    {
+                        <div class="aftercare-body">
+                            <p>@item.Body</p>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+</section>
+
+@code {
+    private int _openIndex = 1;
+
+    private void Toggle(int id) => _openIndex = _openIndex == id ? 0 : id;
+
+    private sealed record AftercareItem(int Id, string Title, string Body);
+
+    private readonly List<AftercareItem> _aftercareItems =
+    [
+        new(1, "Before Your Appointment: Eat, Hydrate & Rest",
+            "Eat a solid meal 1–2 hours before your session and drink plenty of water. Avoid alcohol or blood-thinning medications for 24 hours prior. Bring a valid government-issued photo ID (18+ required) and wear comfortable clothing that gives easy access to the placement area."),
+        new(2, "First 24–48 Hours: Bandage & First Wash",
+            "Follow your artist's specific wrap instructions (second-skin film or traditional wrap). Once removed, wash gently with lukewarm water and unscented antibacterial liquid soap using clean hands only—never a washcloth. Pat dry with a clean paper towel."),
+        new(3, "Days 3–14: Moisturize Lightly, Never Pick",
+            "Apply a thin layer of unscented lotion or artist-recommended balm 2–3 times daily. Your tattoo will lightly peel and itch as it heals—never scratch, pick, or soak it in baths, pools, hot tubs, or lakes until fully healed."),
+        new(4, "Long-Term Care & Sun Protection",
+            "UV rays fade pigment over time. Once your tattoo is completely healed, apply broad-spectrum SPF 30+ whenever it is exposed to direct sunlight to keep blacks deep and colors luminous for years."),
+        new(5, "Piercing & Jewelry Aftercare",
+            "Clean healing piercings twice daily with sterile saline wound wash spray. Avoid twisting, turning, or changing jewelry prematurely, and reach out or stop by the studio if you ever need help swapping or downsizing jewelry.")
+    ];
+}

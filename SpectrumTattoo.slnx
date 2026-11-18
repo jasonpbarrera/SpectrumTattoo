@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="Api/SpectrumTattoo.Api.csproj" />
+  <Project Path="Client/SpectrumTattoo.Client.csproj" />
+</Solution>

@@ -1,0 +1,76 @@
+@page "/gallery"
+
+<PageTitle>Gallery &amp; Flash | Spectrum Tattoo — Benton, TN</PageTitle>
+
+<section class="section">
+    <div class="container">
+        <div class="section-header">
+            <span class="eyebrow">Portfolio &amp; Flash</span>
+            <h1 class="section-title">Selected <em>Ink &amp; Studio</em></h1>
+            <p>
+                A look at the styles, flash sheets, and atmosphere inside Spectrum Tattoo. Follow our
+                <a href="https://www.facebook.com/Theoldcrowtattooparlor" target="_blank" rel="noopener noreferrer" style="color: var(--accent-gold); text-decoration: underline;">Facebook page</a>
+                for daily healed work and flash drops.
+            </p>
+        </div>
+
+        <div class="filter-bar" role="tablist" aria-label="Filter gallery by style">
+            @foreach (var cat in _categories)
+            {
+                <button type="button"
+                        class="filter-btn @(_activeCategory == cat ? "active" : "")"
+                        @onclick="() => _activeCategory = cat">
+                    @cat
+                </button>
+            }
+        </div>
+
+        <div class="gallery-grid">
+            @foreach (var piece in FilteredPieces)
+            {
+                <article class="gallery-card">
+                    <div class="gallery-img-wrap">
+                        <img src="@piece.ImagePath" alt="@piece.Alt" loading="lazy" />
+                    </div>
+                    <div class="gallery-meta">
+                        <div class="gallery-sub">@piece.Category &middot; @piece.Artist</div>
+                        <h3>@piece.Title</h3>
+                        <p style="font-size: 0.88rem; margin: 0;">@piece.Notes</p>
+                    </div>
+                </article>
+            }
+        </div>
+    </div>
+</section>
+
+@code {
+    private string _activeCategory = "All";
+
+    private readonly string[] _categories = ["All", "Neo-Traditional", "Botanical & Watercolor", "Flash Art", "Studio"];
+
+    private sealed record GalleryPiece(string Title, string Category, string Artist, string ImagePath, string Alt, string Notes);
+
+    private readonly List<GalleryPiece> _pieces =
+    [
+        new("Death's-Head Moth & Brass Candle", "Neo-Traditional", "Dawn Yermasek", "images/moth-candle.jpg",
+            "Neo-traditional death's-head moth and lit brass candlestick tattoo with rich crimson and gold shading",
+            "Rich oxblood and burnished gold saturation with crisp ornamental framing."),
+        new("Crimson Peony & Celestial Prism", "Botanical & Watercolor", "Spectrum Crew", "images/botanical-celestial.jpg",
+            "Fine-line crimson peony and constellation watercolor tattoo on forearm",
+            "Delicate botanical linework paired with luminous prism watercolor washes."),
+        new("Dagger, Peonies & Moth Flash", "Flash Art", "Custom Studio Flash", "images/flash-dagger.jpg",
+            "Custom neo-traditional dagger, crimson peony, and moth tattoo flash illustration on dark paper",
+            "Available for custom adaptation—ask your artist about placement and sizing."),
+        new("Precision at the Chair", "Studio", "Benton, TN", "images/hero-studio.jpg",
+            "Tattoo artist wearing black nitrile gloves and gold rings holding a rotary tattoo machine",
+            "Light-handed precision and calm focus inside our US-411 studio."),
+        new("The Benton Sanctuary", "Studio", "6165 US-411", "images/studio-interior.jpg",
+            "Spectrum Tattoo studio interior with antique brass mirrors, dried florals, and sterile workstation",
+            "Spotless stainless steel stations surrounded by warm brass and dried botanicals.")
+    ];
+
+    private IEnumerable<GalleryPiece> FilteredPieces =>
+        _activeCategory == "All"
+            ? _pieces
+            : _pieces.Where(p => p.Category == _activeCategory);
+}

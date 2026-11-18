@@ -1,0 +1,8 @@
+bin/
+obj/
+publish_output/
+.vs/
+*.user
+*.suo
+.DS_Store
+Api/local.settings.json

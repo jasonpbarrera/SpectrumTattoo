@@ -1,0 +1,21 @@
+{
+  "name": "Spectrum Tattoo — Benton, TN",
+  "short_name": "Spectrum Tattoo",
+  "description": "Custom tattoos, fine-line botanicals, watercolor, body piercing, and permanent makeup in Benton, Tennessee.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0b0a0c",
+  "theme_color": "#0b0a0c",
+  "icons": [
+    {
+      "src": "icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    },
+    {
+      "src": "icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    }
+  ]
+}

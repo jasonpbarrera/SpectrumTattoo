@@ -1,0 +1,109 @@
+name: Azure Static Web Apps CI/CD
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths-ignore:
+      - '**.md'
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches:
+      - main
+      - master
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build_and_deploy_job:
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.action != 'closed')
+    runs-on: ubuntu-latest
+    name: Build and Deploy Job
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          lfs: false
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Cache NuGet Packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Verify Azure Functions API Build
+        run: dotnet build Api/SpectrumTattoo.Api.csproj -c Release
+
+      - name: Publish Blazor Client
+        run: dotnet publish Client/SpectrumTattoo.Client.csproj -c Release -o publish_output
+
+      - name: Build And Deploy
+        id: builddeploy
+        if: env.SWA_TOKEN != ''
+        env:
+          SWA_TOKEN: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: "upload"
+          app_location: "publish_output/wwwroot"
+          api_location: "Api"
+          output_location: ""
+          skip_app_build: true
+
+      - name: Submit URLs to IndexNow
+        if: github.event_name == 'push'
+        run: |
+          python3 -c '
+          import json, urllib.request
+          domain = "https://spectrumtattootn.com"
+          host = "spectrumtattootn.com"
+          urls = [
+              f"{domain}/",
+              f"{domain}/artists",
+              f"{domain}/services",
+              f"{domain}/gallery",
+              f"{domain}/book",
+              f"{domain}/privacy",
+              f"{domain}/terms"
+          ]
+          payload = json.dumps({
+              "host": host,
+              "key": "7f9a4c2e1b8d40f3a6e5c9d2b1a84730",
+              "keyLocation": f"{domain}/7f9a4c2e1b8d40f3a6e5c9d2b1a84730.txt",
+              "urlList": urls
+          }).encode("utf-8")
+          for ep in ["https://api.indexnow.org/indexnow", "https://www.bing.com/indexnow"]:
+              try:
+                  req = urllib.request.Request(ep, data=payload, headers={"Content-Type": "application/json; charset=utf-8", "User-Agent": "JBDigitalCI/1.0"})
+                  with urllib.request.urlopen(req, timeout=10) as resp:
+                      print(f"Submitted to {ep}: {resp.status}")
+              except Exception as e:
+                  print(f"Crawler notice ({ep}): {e}")
+          '
+
+  close_pull_request_job:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    name: Close Pull Request Job
+    steps:
+      - name: Close Pull Request
+        id: closepullrequest
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          action: "close"
