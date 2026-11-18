@@ -1,14 +1,14 @@
 @page "/gallery"
 
-<PageTitle>Gallery &amp; Flash | Spectrum Tattoo — Benton, TN</PageTitle>
+<PageTitle>Gallery &amp; Portfolio | Spectrum Tattoo — Benton, TN</PageTitle>
 
 <section class="section">
     <div class="container">
         <div class="section-header">
-            <span class="eyebrow">Portfolio &amp; Flash</span>
-            <h1 class="section-title">Selected <em>Ink &amp; Studio</em></h1>
+            <span class="eyebrow">Real Studio Work</span>
+            <h1 class="section-title">Selected <em>Ink &amp; Sessions</em></h1>
             <p>
-                A look at the styles, flash sheets, and atmosphere inside Spectrum Tattoo. Follow our
+                Real tattoos and in-chair sessions from our all-women crew in Benton, TN. Follow our
                 <a href="https://www.instagram.com/_spectrumtattoostudio_/" target="_blank" rel="noopener noreferrer" style="color: var(--accent-gold); text-decoration: underline;">Instagram</a>
                 and
                 <a href="https://www.facebook.com/Theoldcrowtattooparlor" target="_blank" rel="noopener noreferrer" style="color: var(--accent-gold); text-decoration: underline;">Facebook</a>
@@ -48,27 +48,48 @@
 @code {
     private string _activeCategory = "All";
 
-    private readonly string[] _categories = ["All", "Neo-Traditional", "Botanical & Watercolor", "Flash Art", "Studio"];
+    private readonly string[] _categories = ["All", "Watercolor & Pop Culture", "Botanical & Fine Line", "Blackwork & Surreal", "Color & Neo-Traditional", "In the Chair"];
 
     private sealed record GalleryPiece(string Title, string Category, string Artist, string ImagePath, string Alt, string Notes);
 
     private readonly List<GalleryPiece> _pieces =
     [
-        new("Death's-Head Moth & Brass Candle", "Neo-Traditional", "Dawn Yermasek", "images/moth-candle.jpg",
-            "Neo-traditional death's-head moth and lit brass candlestick tattoo with rich crimson and gold shading",
-            "Rich oxblood and burnished gold saturation with crisp ornamental framing."),
-        new("Crimson Peony & Celestial Prism", "Botanical & Watercolor", "Spectrum Crew", "images/botanical-celestial.jpg",
-            "Fine-line crimson peony and constellation watercolor tattoo on forearm",
-            "Delicate botanical linework paired with luminous prism watercolor washes."),
-        new("Dagger, Peonies & Moth Flash", "Flash Art", "Custom Studio Flash", "images/flash-dagger.jpg",
-            "Custom neo-traditional dagger, crimson peony, and moth tattoo flash illustration on dark paper",
-            "Available for custom adaptation—ask your artist about placement and sizing."),
-        new("Precision at the Chair", "Studio", "Benton, TN", "images/hero-studio.jpg",
-            "Tattoo artist wearing black nitrile gloves and gold rings holding a rotary tattoo machine",
-            "Light-handed precision and calm focus inside our US-411 studio."),
-        new("The Benton Sanctuary", "Studio", "6165 US-411", "images/studio-interior.jpg",
-            "Spectrum Tattoo studio interior with antique brass mirrors, dried florals, and sterile workstation",
-            "Spotless stainless steel stations surrounded by warm brass and dried botanicals.")
+        new("Death Note Chest Piece", "Watercolor & Pop Culture", "Spectrum Tattoo", "images/tattoo-deathnote-chest.webp",
+            "Custom Death Note chest tattoo featuring Ryuk, L, Light, and Near with watercolor splashes and wings",
+            "Bold anime portraiture framed with wing silhouettes and vibrant watercolor accents."),
+        new("InuYasha & Kagome Wrap", "Watercolor & Pop Culture", "Spectrum Tattoo", "images/tattoo-inuyasha-watercolor.webp",
+            "Full-color InuYasha and Kagome watercolor sleeve wrap tattoo",
+            "Luminous watercolor saturation and delicate cherry blossom detail."),
+        new("Zelda & Navi Watercolor", "Watercolor & Pop Culture", "Spectrum Tattoo", "images/tattoo-zelda-watercolor.webp",
+            "Legend of Zelda Sheik and Navi watercolor tattoo with vivid color splatters",
+            "Crisp illustrative linework layered with bright prism watercolor splatters."),
+        new("Botanical Watercolor Back Piece", "Botanical & Fine Line", "Spectrum Tattoo", "images/tattoo-botanical-back.webp",
+            "Custom pink, teal, and violet watercolor floral back tattoo",
+            "Flowing floral anatomy with soft translucent petal washes."),
+        new("Aurora Pines & Silhouettes", "Watercolor & Pop Culture", "Spectrum Tattoo", "images/tattoo-aurora-pines.webp",
+            "Pine forest and crescent moon watercolor aurora tattoo with silhouettes",
+            "Atmospheric northern lights sky paired with crisp tree silhouettes."),
+        new("Crimson & Violet Octopus", "Color & Neo-Traditional", "Spectrum Tattoo", "images/tattoo-crimson-octopus.webp",
+            "Bold saturated red and purple octopus thigh tattoo",
+            "Heavy color packing, expressive eye detail, and dynamic tentacle flow."),
+        new("The Scream & Watercolor Roses", "Blackwork & Surreal", "Spectrum Tattoo", "images/tattoo-scream-roses.webp",
+            "Dark surrealist cracked-porcelain Scream tattoo with stitched neck and watercolor roses",
+            "Cracked-stone texture contrasted against violet and crimson watercolor roses."),
+        new("Surrealist Dripping Eye", "Blackwork & Surreal", "Spectrum Tattoo", "images/tattoo-surreal-eye.webp",
+            "Black and grey surrealist dripping eye tattoo",
+            "Sharp stippling, organic drip linework, and expressive iris contrast."),
+        new("Sugar Skull & Wolf Watercolor", "Watercolor & Pop Culture", "Spectrum Tattoo", "images/tattoo-sugarskull-wolf.webp",
+            "Sugar skull portrait and wolf watercolor tattoo with custom script",
+            "Dual portrait & wolf composition with dripping watercolor texture."),
+        new("Portfolio Highlights", "Botanical & Fine Line", "Spectrum Tattoo", "images/tattoo-studio-collage.webp",
+            "Seven-panel showcase of floral spine pieces, JoJo anime art, dagger, and mandala tattoos",
+            "Spine florals, mandalas, anime, and neo-traditional daggers by our resident crew."),
+        new("Sketch Raptor in Progress", "In the Chair", "Spectrum Tattoo", "images/artist-raptor-session.webp",
+            "Spectrum Tattoo artist in black gloves tattooing a sketch-style dinosaur piece",
+            "Custom blackwork sketch-style session in progress on US-411."),
+        new("Fine-Line Botanical Session", "In the Chair", "Spectrum Tattoo", "images/studio-fineline-session.webp",
+            "Artist tattooing delicate fine-line floral stems on a forearm",
+            "Steady coil-machine linework in our Benton studio.")
     ];
 
     private IEnumerable<GalleryPiece> FilteredPieces =>
