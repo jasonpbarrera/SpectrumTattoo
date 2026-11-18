@@ -1,7 +1,7 @@
 @page "/book"
 @using System.Globalization
-@using System.Net.Http.Json
-@inject HttpClient Http
+@using SpectrumTattoo.Client.Services
+@inject LocalBookingService BookingService
 @inject NavigationManager Nav
 
 <PageTitle>Book a Consultation | Spectrum Tattoo — Benton, TN</PageTitle>
@@ -12,7 +12,7 @@
             <span class="eyebrow">Calendar &amp; Artist Approval</span>
             <h1 class="section-title">Book Your <em>Session</em></h1>
             <p>
-                Choose your artist, preferred date, and open time slot. Your artist will review and approve your concept before a non-refundable deposit link is sent.
+                Choose your artist, preferred date, and open time slot. Your artist will review and approve your concept before a non-refundable deposit is collected.
             </p>
         </div>
 
@@ -37,27 +37,23 @@
                     </p>
                 }
 
-                @if (_lookupBooking.Status == "ApprovedAwaitingDeposit" && !string.IsNullOrWhiteSpace(_lookupBooking.StripeCheckoutUrl))
-                {
-                    <div style="margin-top: 1.25rem; display: flex; flex-wrap: wrap; gap: 1rem; align-items: center;">
-                        <a href="@_lookupBooking.StripeCheckoutUrl" class="btn btn-primary">
-                            Pay $@((_lookupBooking.DepositAmountCents / 100.0).ToString("0.00")) Non-Refundable Deposit
-                        </a>
-                        <span style="font-size: 0.85rem; color: var(--text-ash);">Powered by Stripe Checkout &middot; Locks your calendar slot immediately</span>
-                    </div>
-                }
-                else if (_lookupBooking.Status == "ApprovedAwaitingDeposit")
+                @if (_lookupBooking.Status == "ApprovedAwaitingDeposit")
                 {
                     <div class="deposit-notice" style="margin-top: 1.25rem;">
-                        Your artist has approved this slot! Online Stripe checkout is awaiting studio key activation—please call
-                        <a href="tel:+14232999111" style="color: var(--accent-gold);">(423) 299-9111</a> or stop by 6165 US-411 to place your $@((_lookupBooking.DepositAmountCents / 100.0).ToString("0")) deposit.
+                        <strong>Simulated Mode (Stripe Disabled):</strong> Your artist has approved this slot! Click below to simulate paying your <strong>$@((_lookupBooking.DepositAmountCents / 100.0).ToString("0.00"))</strong> non-refundable deposit and lock your calendar slot.
+                    </div>
+                    <div style="margin-top: 1rem; display: flex; flex-wrap: wrap; gap: 1rem; align-items: center;">
+                        <button type="button" class="btn btn-primary" @onclick="() => SimulateDepositPaidAsync(_lookupBooking.Id)">
+                            Simulate Deposit Paid ($@((_lookupBooking.DepositAmountCents / 100.0).ToString("0")))
+                        </button>
+                        <span style="font-size: 0.85rem; color: var(--text-ash);">Stripe checkout is currently disabled &middot; Simulated in-browser</span>
                     </div>
                 }
                 else if (_lookupBooking.Status == "Confirmed")
                 {
                     <div style="margin-top: 1.25rem; display: flex; flex-wrap: wrap; gap: 1rem; align-items: center;">
-                        <a href="/api/bookings?op=ics&id=@_lookupBooking.Id" class="btn btn-outline btn-sm">Add to Calendar (.ics)</a>
-                        <span style="font-size: 0.85rem; color: #86efac;">Deposit received &middot; Your appointment is locked in!</span>
+                        <a href="@LocalBookingService.BuildIcsDataUri(_lookupBooking)" download="spectrum-tattoo-@(_lookupBooking.Id).ics" class="btn btn-outline btn-sm">Add to Calendar (.ics)</a>
+                        <span style="font-size: 0.85rem; color: #86efac;">Deposit recorded &middot; Your appointment is locked in!</span>
                     </div>
                 }
             </div>
@@ -75,10 +71,10 @@
                             with <strong>@_createdBooking.Artist</strong> on <strong>@_createdBooking.Date</strong> at <strong>@_createdBooking.TimeSlot</strong> is now in the studio queue.
                         </p>
                         <div class="deposit-notice" style="margin: 1.25rem 0;">
-                            <strong>Next Step:</strong> Once your artist approves the concept and timing, your non-refundable deposit ($@((_createdBooking.DepositAmountCents / 100.0).ToString("0"))) will lock in the slot. Save your booking code: <strong style="color: var(--accent-gold);">@_createdBooking.Id</strong>.
+                            <strong>Next Step (Simulated Mode):</strong> Open the <NavLink href="/studio-admin" style="color: var(--accent-gold); text-decoration: underline;">Studio Portal</NavLink> (PIN <code>4110</code>) to approve this request, then simulate the $@((_createdBooking.DepositAmountCents / 100.0).ToString("0")) deposit. Save your booking code: <strong style="color: var(--accent-gold);">@_createdBooking.Id</strong>.
                         </div>
                         <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1.25rem;">
-                            <a href="/api/bookings?op=ics&id=@_createdBooking.Id" class="btn btn-outline btn-sm">Download Calendar Hold (.ics)</a>
+                            <a href="@LocalBookingService.BuildIcsDataUri(_createdBooking)" download="spectrum-tattoo-@(_createdBooking.Id).ics" class="btn btn-outline btn-sm">Download Calendar Hold (.ics)</a>
                             <button type="button" class="btn btn-primary btn-sm" @onclick="CheckCreatedStatus">Refresh Booking Status</button>
                             <button type="button" class="btn btn-outline btn-sm" @onclick="ResetForm">Book Another Session</button>
                         </div>
@@ -275,7 +271,7 @@
 @code {
     private ConsultationModel _model = new();
     private readonly List<DateOnly> _upcomingOpenDates = [];
-    private List<SlotItem> _slots = [];
+    private List<SlotAvailability> _slots = [];
     private bool _loadingSlots;
     private bool _isStudioOpen = true;
     private string _scheduleNote = string.Empty;
@@ -285,11 +281,11 @@
     private bool _submitted;
     private string? _slotError;
     private string? _submitError;
-    private BookingSummary? _createdBooking;
+    private LocalBookingRecord? _createdBooking;
 
     private string _lookupCode = string.Empty;
     private string? _lookupError;
-    private BookingSummary? _lookupBooking;
+    private LocalBookingRecord? _lookupBooking;
 
     protected override async Task OnInitializedAsync()
     {
@@ -360,61 +356,19 @@
         _loadingSlots = true;
         try
         {
-            var url = $"api/bookings?op=availability&artist={Uri.EscapeDataString(_model.PreferredArtist)}&date={Uri.EscapeDataString(_model.Date)}";
-            var resp = await Http.GetFromJsonAsync<AvailabilityResponse>(url);
-            if (resp is not null && resp.Ok)
+            var (isOpen, note, slots) = await BookingService.GetAvailabilityAsync(_model.PreferredArtist, _model.Date);
+            _isStudioOpen = isOpen;
+            _scheduleNote = note;
+            _slots = slots;
+            if (string.IsNullOrWhiteSpace(_model.TimeSlot) || !_slots.Any(s => s.Time == _model.TimeSlot && s.Available))
             {
-                _isStudioOpen = resp.IsOpen;
-                _scheduleNote = resp.Note;
-                _depositCents = resp.DepositAmountCents > 0 ? resp.DepositAmountCents : 5000;
-                _slots = resp.Slots;
-                if (string.IsNullOrWhiteSpace(_model.TimeSlot))
-                {
-                    _model.TimeSlot = _slots.FirstOrDefault(s => s.Available)?.Time ?? string.Empty;
-                }
-                return;
+                _model.TimeSlot = _slots.FirstOrDefault(s => s.Available)?.Time ?? string.Empty;
             }
-        }
-        catch
-        {
-            // Fallback to local studio hours if API is offline
         }
         finally
         {
             _loadingSlots = false;
         }
-
-        ApplyLocalScheduleFallback();
-    }
-
-    private void ApplyLocalScheduleFallback()
-    {
-        if (!DateOnly.TryParseExact(_model.Date, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
-            return;
-
-        if (date.DayOfWeek is DayOfWeek.Monday or DayOfWeek.Tuesday)
-        {
-            _isStudioOpen = false;
-            _scheduleNote = "Studio is closed Mondays & Tuesdays. Please select Wednesday–Sunday.";
-            _slots = [];
-            return;
-        }
-
-        _isStudioOpen = true;
-        string[] times = date.DayOfWeek switch
-        {
-            DayOfWeek.Saturday => ["10:00 AM", "11:30 AM", "1:00 PM", "2:30 PM"],
-            DayOfWeek.Sunday => ["10:00 AM", "11:30 AM", "1:00 PM"],
-            _ => ["10:00 AM", "11:30 AM", "1:00 PM", "2:30 PM", "4:00 PM"]
-        };
-        _scheduleNote = date.DayOfWeek == DayOfWeek.Saturday
-            ? "Saturday Hours: 10:00 AM – 4:00 PM"
-            : date.DayOfWeek == DayOfWeek.Sunday
-                ? "Sunday Hours: 10:00 AM – 3:00 PM"
-                : "Studio Hours: 10:00 AM – 6:00 PM";
-        _slots = times.Select(t => new SlotItem(t, true, 0)).ToList();
-        if (string.IsNullOrWhiteSpace(_model.TimeSlot))
-            _model.TimeSlot = _slots.FirstOrDefault()?.Time ?? string.Empty;
     }
 
     private async Task HandleSubmit()
@@ -431,48 +385,27 @@
         _submitting = true;
         try
         {
-            var payload = new
+            _createdBooking = await BookingService.CreateAsync(new LocalBookingRecord
             {
-                artist = _model.PreferredArtist,
-                date = _model.Date,
-                timeSlot = _model.TimeSlot,
-                serviceType = _model.ServiceType,
-                name = _model.Name,
-                phone = _model.Phone,
-                email = _model.Email,
-                placement = _model.Placement,
-                ideaDescription = _model.IdeaDescription
-            };
-
-            var resp = await Http.PostAsJsonAsync("api/bookings", payload);
-            var body = await resp.Content.ReadFromJsonAsync<CreateBookingResponse>();
-            if (resp.IsSuccessStatusCode && body?.Ok == true && body.Booking is not null)
-            {
-                _createdBooking = body.Booking;
-                _submitted = true;
-            }
-            else
-            {
-                _submitError = body?.Error ?? "Could not submit booking request. Please try again.";
-                await LoadAvailabilityAsync();
-            }
+                Artist = _model.PreferredArtist,
+                Date = _model.Date,
+                TimeSlot = _model.TimeSlot,
+                ServiceType = _model.ServiceType,
+                Name = _model.Name,
+                Phone = _model.Phone,
+                Email = _model.Email,
+                Placement = _model.Placement,
+                IdeaDescription = _model.IdeaDescription,
+                Status = "PendingApproval",
+                DepositAmountCents = _depositCents,
+                DepositPaid = false
+            });
+            _submitted = true;
+            await LoadAvailabilityAsync();
         }
         catch
         {
-            // Offline preview fallback
-            _createdBooking = new BookingSummary(
-                $"ST-{Guid.NewGuid().ToString("N")[..6].ToUpperInvariant()}",
-                _model.PreferredArtist,
-                _model.Date,
-                _model.TimeSlot,
-                _model.ServiceType,
-                _model.Name,
-                "PendingApproval",
-                _depositCents,
-                false,
-                null,
-                null);
-            _submitted = true;
+            _submitError = "Could not save booking request locally. Please try again.";
         }
         finally
         {
@@ -493,21 +426,23 @@
         var code = _lookupCode.Trim().ToUpperInvariant();
         if (string.IsNullOrWhiteSpace(code)) return;
 
-        try
+        var found = await BookingService.GetAsync(code);
+        if (found is not null)
         {
-            var resp = await Http.GetFromJsonAsync<LookupBookingResponse>($"api/bookings?id={Uri.EscapeDataString(code)}");
-            if (resp?.Ok == true && resp.Booking is not null)
-            {
-                _lookupBooking = resp.Booking;
-                return;
-            }
-        }
-        catch
-        {
-            // Not found
+            _lookupBooking = found;
+            return;
         }
 
         _lookupError = $"No booking found for code {code}.";
+    }
+
+    private async Task SimulateDepositPaidAsync(string id)
+    {
+        await BookingService.UpdateStatusAsync(id, "Confirmed", depositPaid: true);
+        _lookupBooking = await BookingService.GetAsync(id);
+        if (_createdBooking is not null && string.Equals(_createdBooking.Id, id, StringComparison.OrdinalIgnoreCase))
+            _createdBooking = _lookupBooking;
+        await LoadAvailabilityAsync();
     }
 
     private void ResetForm()
@@ -538,23 +473,6 @@
         "Declined" => "Declined",
         _ => "Pending Artist Approval"
     };
-
-    private sealed record AvailabilityResponse(bool Ok, bool IsOpen, string Note, int DepositAmountCents, List<SlotItem> Slots);
-    private sealed record SlotItem(string Time, bool Available, int PendingRequests);
-    private sealed record CreateBookingResponse(bool Ok, string? Error, BookingSummary? Booking);
-    private sealed record LookupBookingResponse(bool Ok, BookingSummary? Booking);
-    private sealed record BookingSummary(
-        string Id,
-        string Artist,
-        string Date,
-        string TimeSlot,
-        string ServiceType,
-        string Name,
-        string Status,
-        int DepositAmountCents,
-        bool DepositPaid,
-        string? StripeCheckoutUrl,
-        string? ArtistNote);
 
     public sealed class ConsultationModel
     {

@@ -44,9 +44,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
 
-      - name: Verify Azure Functions API Build
-        run: dotnet build Api/SpectrumTattoo.Api.csproj -c Release
-
       - name: Publish Blazor Client
         run: dotnet publish Client/SpectrumTattoo.Client.csproj -c Release -o publish_output
 
