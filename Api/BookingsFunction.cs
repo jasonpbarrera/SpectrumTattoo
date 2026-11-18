@@ -108,10 +108,31 @@ public sealed class BookingsFunction(
         return ok;
     }
 
-    [Function("bookings-create")]
-    public async Task<HttpResponseData> CreateBooking(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "bookings")] HttpRequestData req)
+    [Function("bookings")]
+    public async Task<HttpResponseData> BookingsCollection(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", "post", Route = "bookings")] HttpRequestData req)
     {
+        if (string.Equals(req.Method, "GET", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!IsAuthorized(req))
+            {
+                var unauth = req.CreateResponse(HttpStatusCode.Unauthorized);
+                await unauth.WriteAsJsonAsync(new { ok = false, error = "Invalid studio PIN." });
+                return unauth;
+            }
+
+            var bookings = await store.ListAsync();
+            var listOk = req.CreateResponse(HttpStatusCode.OK);
+            await listOk.WriteAsJsonAsync(new
+            {
+                ok = true,
+                stripeConfigured = IsStripeConfigured(),
+                defaultDepositCents = GetDefaultDepositCents(),
+                bookings
+            });
+            return listOk;
+        }
+
         CreateBookingRequest? payload;
         try
         {
@@ -232,29 +253,6 @@ public sealed class BookingsFunction(
                 icsUrl = $"/api/bookings/{booking.Id}/ics"
             },
             stripeConfigured = IsStripeConfigured()
-        });
-        return ok;
-    }
-
-    [Function("bookings-list")]
-    public async Task<HttpResponseData> ListBookings(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "bookings")] HttpRequestData req)
-    {
-        if (!IsAuthorized(req))
-        {
-            var unauth = req.CreateResponse(HttpStatusCode.Unauthorized);
-            await unauth.WriteAsJsonAsync(new { ok = false, error = "Invalid studio PIN." });
-            return unauth;
-        }
-
-        var bookings = await store.ListAsync();
-        var ok = req.CreateResponse(HttpStatusCode.OK);
-        await ok.WriteAsJsonAsync(new
-        {
-            ok = true,
-            stripeConfigured = IsStripeConfigured(),
-            defaultDepositCents = GetDefaultDepositCents(),
-            bookings
         });
         return ok;
     }
