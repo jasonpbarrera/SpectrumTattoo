@@ -62,6 +62,14 @@ public sealed class LocalBookingService(HttpClient http)
         return body?.Ok == true ? body.Booking : null;
     }
 
+    public async Task<List<LocalBookingRecord>> LookupAsync(string phoneOrCode)
+    {
+        var resp = await http.GetAsync($"{ApiBase}?lookup={Uri.EscapeDataString(phoneOrCode.Trim())}");
+        if (!resp.IsSuccessStatusCode) return [];
+        var body = await resp.Content.ReadFromJsonAsync<ListBookingsApiResponse>();
+        return body?.Ok == true ? (body.Bookings ?? []) : [];
+    }
+
     public async Task<LocalBookingRecord> CreateAsync(LocalBookingRecord record)
     {
         var resp = await http.PostAsJsonAsync(ApiBase, new

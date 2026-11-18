@@ -66,6 +66,15 @@ public class BookingsFunction(
         return dict;
     }
 
+    private static string NormalizePhone(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
+        var digits = new string(raw.Where(char.IsDigit).ToArray());
+        if (digits.Length == 11 && digits.StartsWith('1'))
+            digits = digits[1..];
+        return digits;
+    }
+
     private static async Task<HttpResponseData> JsonResponse(HttpRequestData req, HttpStatusCode status, object body)
     {
         var resp = req.CreateResponse(status);
@@ -147,13 +156,74 @@ public class BookingsFunction(
                 return icsResp;
             }
 
+            if (query.TryGetValue("lookup", out var lookupTerm) && !string.IsNullOrWhiteSpace(lookupTerm))
+            {
+                var term = lookupTerm.Trim();
+                var digits = NormalizePhone(term);
+                var all = await store.ListAsync();
+
+                var matches = all.Where(b =>
+                    string.Equals(b.Id, term, StringComparison.OrdinalIgnoreCase)
+                    || (digits.Length >= 7 && NormalizePhone(b.Phone) == digits))
+                    .Select(b => new
+                    {
+                        b.Id,
+                        b.Artist,
+                        b.Date,
+                        b.TimeSlot,
+                        b.ServiceType,
+                        b.Name,
+                        b.Status,
+                        b.DepositAmountCents,
+                        b.DepositPaid,
+                        b.ArtistNote,
+                        b.CreatedAt
+                    })
+                    .ToList();
+
+                if (matches.Count == 0)
+                    return await JsonResponse(req, HttpStatusCode.NotFound, new { ok = false, error = "No bookings found for that phone number or code." });
+
+                return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, booking = matches[0], bookings = matches });
+            }
+
+            if (query.TryGetValue("phone", out var phoneQuery) && !string.IsNullOrWhiteSpace(phoneQuery))
+            {
+                var digits = NormalizePhone(phoneQuery);
+                if (digits.Length < 7)
+                    return await JsonResponse(req, HttpStatusCode.BadRequest, new { ok = false, error = "Please enter a valid phone number." });
+
+                var all = await store.ListAsync();
+                var matches = all.Where(b => NormalizePhone(b.Phone) == digits)
+                    .Select(b => new
+                    {
+                        b.Id,
+                        b.Artist,
+                        b.Date,
+                        b.TimeSlot,
+                        b.ServiceType,
+                        b.Name,
+                        b.Status,
+                        b.DepositAmountCents,
+                        b.DepositPaid,
+                        b.ArtistNote,
+                        b.CreatedAt
+                    })
+                    .ToList();
+
+                if (matches.Count == 0)
+                    return await JsonResponse(req, HttpStatusCode.NotFound, new { ok = false, error = "No bookings found for that phone number." });
+
+                return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, booking = matches[0], bookings = matches });
+            }
+
             if (query.TryGetValue("id", out var lookupId) && !string.IsNullOrWhiteSpace(lookupId))
             {
                 var single = await store.GetAsync(lookupId.Trim());
                 if (single is null)
                     return await JsonResponse(req, HttpStatusCode.NotFound, new { ok = false, error = "Booking not found." });
 
-                return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, booking = single });
+                return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, booking = single, bookings = new[] { single } });
             }
 
             if (!IsAuthorized(req))
