@@ -73,7 +73,7 @@ public sealed class BookingsFunction(
         return dict;
     }
 
-    [Function("availability")]
+    [Function("GetAvailability")]
     public async Task<HttpResponseData> GetAvailability(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "availability")] HttpRequestData req)
     {
@@ -128,7 +128,7 @@ public sealed class BookingsFunction(
         return ok;
     }
 
-    [Function("bookings")]
+    [Function("BookingsEndpoint")]
     public async Task<HttpResponseData> BookingsCollection(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", "post", Route = "bookings")] HttpRequestData req)
     {
@@ -278,7 +278,7 @@ public sealed class BookingsFunction(
         return ok;
     }
 
-    [Function("booking-action")]
+    [Function("BookingAction")]
     public async Task<HttpResponseData> BookingAction(
         [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "booking-action")] HttpRequestData req)
     {
@@ -361,7 +361,7 @@ public sealed class BookingsFunction(
         return ok;
     }
 
-    [Function("stripe-webhook")]
+    [Function("StripeWebhook")]
     public async Task<HttpResponseData> StripeWebhook(
         [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "stripe-webhook")] HttpRequestData req)
     {
@@ -418,7 +418,7 @@ public sealed class BookingsFunction(
         return ok;
     }
 
-    [Function("booking-ics")]
+    [Function("DownloadBookingIcs")]
     public async Task<HttpResponseData> DownloadIcs(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "booking-ics")] HttpRequestData req)
     {
