@@ -219,9 +219,24 @@ public class BookingsFunction(
             return await JsonResponse(req, HttpStatusCode.OK, new { ok = true });
         }
 
-        if (postOp is "approve" or "confirm" or "confirm-manual" or "decline" or "simulate-deposit")
+        if (postOp == "delete")
         {
-            if (postOp != "simulate-deposit" && !IsAuthorized(req))
+            if (!IsAuthorized(req))
+                return await JsonResponse(req, HttpStatusCode.Unauthorized, new { ok = false, error = "Invalid studio PIN." });
+
+            if (string.IsNullOrWhiteSpace(payload.Id))
+                return await JsonResponse(req, HttpStatusCode.BadRequest, new { ok = false, error = "Booking id is required." });
+
+            var (deleted, delErr) = await store.DeleteAsync(payload.Id);
+            if (!deleted)
+                return await JsonResponse(req, HttpStatusCode.BadGateway, new { ok = false, error = delErr });
+
+            return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, deletedId = payload.Id.Trim() });
+        }
+
+        if (postOp is "approve" or "confirm" or "confirm-manual" or "decline" or "cancel" or "simulate-deposit")
+        {
+            if (postOp is not "simulate-deposit" and not "cancel" && !IsAuthorized(req))
                 return await JsonResponse(req, HttpStatusCode.Unauthorized, new { ok = false, error = "Invalid studio PIN." });
 
             if (string.IsNullOrWhiteSpace(payload.Id))
@@ -245,6 +260,10 @@ public class BookingsFunction(
             {
                 item.Status = "Declined";
                 item.DepositPaid = false;
+            }
+            else if (postOp == "cancel")
+            {
+                item.Status = "Cancelled";
             }
 
             if (payload.ArtistNote is not null) item.ArtistNote = payload.ArtistNote;

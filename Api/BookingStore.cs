@@ -222,6 +222,37 @@ public sealed class BookingStore
         return (false, $"Database write failed ({(int)response.StatusCode}).");
     }
 
+    public async Task<(bool Ok, string Error)> DeleteAsync(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return (false, "Booking id is required.");
+        var cleanId = id.Trim();
+
+        if (!_useCosmos)
+        {
+            MemoryFallback.TryRemove(cleanId, out _);
+            return (true, string.Empty);
+        }
+
+        string resourceLink = $"dbs/{_databaseId}/colls/{_containerId}/docs/{Uri.EscapeDataString(cleanId)}";
+        string requestUri = $"{_endpoint}/{resourceLink}";
+        string utcDate = DateTime.UtcNow.ToString("r", CultureInfo.InvariantCulture);
+        string authHeader = GenerateCosmosAuthToken("delete", "docs", resourceLink, utcDate, _key);
+
+        using var request = new HttpRequestMessage(HttpMethod.Delete, requestUri);
+        request.Headers.Add("Authorization", authHeader);
+        request.Headers.Add("x-ms-date", utcDate);
+        request.Headers.Add("x-ms-version", "2018-12-31");
+        request.Headers.Add("x-ms-documentdb-partitionkey", JsonSerializer.Serialize(new[] { PartitionKey }));
+
+        var response = await _http.SendAsync(request);
+        if (response.IsSuccessStatusCode || response.StatusCode == HttpStatusCode.NotFound)
+            return (true, string.Empty);
+
+        string err = await response.Content.ReadAsStringAsync();
+        _logger.LogError("Cosmos delete failed with {Status}: {Error}", response.StatusCode, err);
+        return (false, $"Database delete failed ({(int)response.StatusCode}).");
+    }
+
     private static string GenerateCosmosAuthToken(
         string verb,
         string resourceType,

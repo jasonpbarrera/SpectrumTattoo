@@ -40,20 +40,48 @@
                 @if (_lookupBooking.Status == "ApprovedAwaitingDeposit")
                 {
                     <div class="deposit-notice" style="margin-top: 1.25rem;">
-                        <strong>Simulated Mode (Stripe Disabled):</strong> Your artist has approved this slot! Click below to simulate paying your <strong>$@((_lookupBooking.DepositAmountCents / 100.0).ToString("0.00"))</strong> non-refundable deposit and lock your calendar slot.
+                        Your artist has approved this slot! Complete your <strong>$@((_lookupBooking.DepositAmountCents / 100.0).ToString("0.00"))</strong> non-refundable deposit below to lock your appointment.
                     </div>
-                    <div style="margin-top: 1rem; display: flex; flex-wrap: wrap; gap: 1rem; align-items: center;">
+                    <div style="margin-top: 1rem; display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center;">
                         <button type="button" class="btn btn-primary" @onclick="() => SimulateDepositPaidAsync(_lookupBooking.Id)">
-                            Simulate Deposit Paid ($@((_lookupBooking.DepositAmountCents / 100.0).ToString("0")))
+                            Confirm Deposit ($@((_lookupBooking.DepositAmountCents / 100.0).ToString("0")))
                         </button>
-                        <span style="font-size: 0.85rem; color: var(--text-ash);">Stripe checkout is currently disabled &middot; Simulated in-browser</span>
+                        <span style="font-size: 0.85rem; color: var(--text-ash);">Online card checkout coming soon &middot; Simulated deposit confirmation</span>
                     </div>
                 }
                 else if (_lookupBooking.Status == "Confirmed")
                 {
-                    <div style="margin-top: 1.25rem; display: flex; flex-wrap: wrap; gap: 1rem; align-items: center;">
+                    <div style="margin-top: 1.25rem; display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center;">
                         <a href="@LocalBookingService.BuildIcsDataUri(_lookupBooking)" download="spectrum-tattoo-@(_lookupBooking.Id).ics" class="btn btn-outline btn-sm">Add to Calendar (.ics)</a>
                         <span style="font-size: 0.85rem; color: #86efac;">Deposit recorded &middot; Your appointment is locked in!</span>
+                    </div>
+                }
+                else if (_lookupBooking.Status == "Cancelled")
+                {
+                    <div class="deposit-notice" style="margin-top: 1.25rem; border-color: rgba(253,164,175,0.45); color: #fda4af;">
+                        This appointment has been cancelled and the time slot has been released.
+                    </div>
+                }
+
+                @if (_lookupBooking.Status is "PendingApproval" or "ApprovedAwaitingDeposit" or "Confirmed")
+                {
+                    <div style="margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid rgba(255,255,255,0.08); display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center;">
+                        @if (_confirmCancelId == _lookupBooking.Id)
+                        {
+                            <span style="font-size: 0.85rem; color: #fda4af;">
+                                Cancel this appointment?@( _lookupBooking.DepositPaid ? " (Deposits are non-refundable.)" : "")
+                            </span>
+                            <button type="button" class="btn btn-outline btn-sm" style="border-color: rgba(253,164,175,0.6); color: #fda4af;" disabled="@_cancelling" @onclick="() => CancelBookingAsync(_lookupBooking.Id)">
+                                @(_cancelling ? "Cancelling..." : "Yes, Cancel Appointment")
+                            </button>
+                            <button type="button" class="btn btn-outline btn-sm" @onclick="() => _confirmCancelId = null">Keep Appointment</button>
+                        }
+                        else
+                        {
+                            <button type="button" class="btn btn-outline btn-sm" style="border-color: rgba(253,164,175,0.4); color: #fda4af;" @onclick="() => _confirmCancelId = _lookupBooking.Id">
+                                Cancel Appointment
+                            </button>
+                        }
                     </div>
                 }
             </div>
@@ -65,17 +93,35 @@
                 {
                     <div style="padding: 1rem 0;">
                         <span class="eyebrow">Request Logged &middot; @_createdBooking.Id</span>
-                        <h2 style="font-size: 2.2rem; margin: 0.85rem 0;">Pending Artist Approval</h2>
+                        <h2 style="font-size: 2.2rem; margin: 0.85rem 0;">@(_createdBooking.Status == "Cancelled" ? "Request Cancelled" : "Pending Artist Approval")</h2>
                         <p>
                             Thank you, <strong>@_createdBooking.Name</strong>. Your request for <strong>@_createdBooking.ServiceType</strong>
-                            with <strong>@_createdBooking.Artist</strong> on <strong>@_createdBooking.Date</strong> at <strong>@_createdBooking.TimeSlot</strong> is now in the studio queue.
+                            with <strong>@_createdBooking.Artist</strong> on <strong>@_createdBooking.Date</strong> at <strong>@_createdBooking.TimeSlot</strong>
+                            @(_createdBooking.Status == "Cancelled" ? "has been cancelled." : "is now in the studio queue.")
                         </p>
-                        <div class="deposit-notice" style="margin: 1.25rem 0;">
-                            <strong>Next Step (Simulated Mode):</strong> Open the <NavLink href="/studio-admin" style="color: var(--accent-gold); text-decoration: underline;">Studio Portal</NavLink> (PIN <code>4110</code>) to approve this request, then simulate the $@((_createdBooking.DepositAmountCents / 100.0).ToString("0")) deposit. Save your booking code: <strong style="color: var(--accent-gold);">@_createdBooking.Id</strong>.
-                        </div>
-                        <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1.25rem;">
-                            <a href="@LocalBookingService.BuildIcsDataUri(_createdBooking)" download="spectrum-tattoo-@(_createdBooking.Id).ics" class="btn btn-outline btn-sm">Download Calendar Hold (.ics)</a>
-                            <button type="button" class="btn btn-primary btn-sm" @onclick="CheckCreatedStatus">Refresh Booking Status</button>
+                        @if (_createdBooking.Status != "Cancelled")
+                        {
+                            <div class="deposit-notice" style="margin: 1.25rem 0;">
+                                <strong>Next Step:</strong> Your artist will review your concept and timing. Once approved, a non-refundable $@((_createdBooking.DepositAmountCents / 100.0).ToString("0")) deposit secures your appointment. Save your booking code: <strong style="color: var(--accent-gold);">@_createdBooking.Id</strong> to check your status or cancel anytime.
+                            </div>
+                        }
+                        <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1.25rem; align-items: center;">
+                            @if (_createdBooking.Status != "Cancelled")
+                            {
+                                <a href="@LocalBookingService.BuildIcsDataUri(_createdBooking)" download="spectrum-tattoo-@(_createdBooking.Id).ics" class="btn btn-outline btn-sm">Download Calendar Hold (.ics)</a>
+                                <button type="button" class="btn btn-primary btn-sm" @onclick="CheckCreatedStatus">Check Booking Status</button>
+                                @if (_confirmCancelId == _createdBooking.Id)
+                                {
+                                    <button type="button" class="btn btn-outline btn-sm" style="border-color: rgba(253,164,175,0.6); color: #fda4af;" disabled="@_cancelling" @onclick="() => CancelBookingAsync(_createdBooking.Id)">
+                                        @(_cancelling ? "Cancelling..." : "Confirm Cancel")
+                                    </button>
+                                    <button type="button" class="btn btn-outline btn-sm" @onclick="() => _confirmCancelId = null">Keep</button>
+                                }
+                                else
+                                {
+                                    <button type="button" class="btn btn-outline btn-sm" style="border-color: rgba(253,164,175,0.4); color: #fda4af;" @onclick="() => _confirmCancelId = _createdBooking.Id">Cancel Request</button>
+                                }
+                            }
                             <button type="button" class="btn btn-outline btn-sm" @onclick="ResetForm">Book Another Session</button>
                         </div>
                     </div>
@@ -267,7 +313,7 @@
                     <ul class="footer-links" style="margin-top: 1rem; gap: 0.75rem;">
                         <li>&bull; Formerly <strong style="color: var(--text-bone);">The Old Crow Tattoo Parlor</strong>—same studio, same US-411 location.</li>
                         <li>&bull; All deposits are <strong style="color: var(--text-bone);">non-refundable</strong> and apply toward your session.</li>
-                        <li>&bull; Artists &amp; studio staff manage approvals in the <NavLink href="/studio-admin" style="color: var(--accent-gold); text-decoration: underline;">Studio Portal</NavLink>.</li>
+                        <li>&bull; Need to reschedule or cancel? Look up your booking code above or call <a href="tel:+14232999111" style="color: var(--accent-gold);">(423) 299-9111</a>.</li>
                     </ul>
                 </div>
             </aside>
@@ -460,6 +506,9 @@
         }
     }
 
+    private string? _confirmCancelId;
+    private bool _cancelling;
+
     private async Task SimulateDepositPaidAsync(string id)
     {
         await BookingService.UpdateStatusAsync(id, "simulate-deposit");
@@ -467,6 +516,26 @@
         if (_createdBooking is not null && string.Equals(_createdBooking.Id, id, StringComparison.OrdinalIgnoreCase))
             _createdBooking = _lookupBooking;
         await LoadAvailabilityAsync();
+    }
+
+    private async Task CancelBookingAsync(string id)
+    {
+        _cancelling = true;
+        try
+        {
+            await BookingService.UpdateStatusAsync(id, "cancel");
+            _confirmCancelId = null;
+            var refreshed = await BookingService.GetAsync(id);
+            if (_lookupBooking is not null && string.Equals(_lookupBooking.Id, id, StringComparison.OrdinalIgnoreCase))
+                _lookupBooking = refreshed;
+            if (_createdBooking is not null && string.Equals(_createdBooking.Id, id, StringComparison.OrdinalIgnoreCase))
+                _createdBooking = refreshed;
+            await LoadAvailabilityAsync();
+        }
+        finally
+        {
+            _cancelling = false;
+        }
     }
 
     private void ResetForm()
@@ -479,6 +548,7 @@
         };
         _submitted = false;
         _createdBooking = null;
+        _confirmCancelId = null;
         _ = LoadAvailabilityAsync();
     }
 
@@ -486,7 +556,7 @@
     {
         "Confirmed" => "status-confirmed",
         "ApprovedAwaitingDeposit" => "status-awaiting",
-        "Declined" => "status-declined",
+        "Declined" or "Cancelled" => "status-declined",
         _ => "status-pending"
     };
 
@@ -495,6 +565,7 @@
         "Confirmed" => "Confirmed · Deposit Paid",
         "ApprovedAwaitingDeposit" => "Approved · Deposit Due",
         "Declined" => "Declined",
+        "Cancelled" => "Cancelled",
         _ => "Pending Artist Approval"
     };
 

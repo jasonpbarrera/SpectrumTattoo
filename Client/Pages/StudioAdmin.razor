@@ -3,46 +3,55 @@
 @inject LocalBookingService BookingService
 @inject NavigationManager Nav
 
-<PageTitle>Studio Approval Portal | Spectrum Tattoo</PageTitle>
+<PageTitle>Studio Portal | Spectrum Tattoo</PageTitle>
 
 <section class="section">
     <div class="container">
         <div class="section-header">
             <span class="eyebrow">Artist &amp; Studio Portal</span>
-            <h1 class="section-title">Booking <em>Approvals</em> &amp; Deposits</h1>
+            <h1 class="section-title">Booking <em>Approvals</em> &amp; Schedule</h1>
             <p>
-                Review incoming appointment requests, approve slots for your calendar, and simulate deposit confirmations.
+                Review incoming appointment requests, filter by artist, approve slots, manage deposits, or cancel and delete bookings.
             </p>
         </div>
 
         @if (!_unlocked)
         {
-            <div class="form-panel" style="max-width: 440px;">
+            <form class="form-panel" style="max-width: 440px;" @onsubmit="UnlockAsync">
                 <span class="eyebrow">Studio Access</span>
                 <h2 style="font-size: 1.65rem; margin: 0.6rem 0 1rem;">Enter Studio PIN</h2>
                 <div class="field-group">
-                    <label class="field-label" for="studio-pin">PIN (Default: 4110)</label>
-                    <input id="studio-pin" type="password" class="field-input" @bind="_pin" placeholder="Enter studio PIN (4110)" />
+                    <label class="field-label" for="studio-pin">PIN</label>
+                    <input id="studio-pin" type="password" class="field-input" @bind="_pin" placeholder="Enter studio PIN" autocomplete="current-password" />
                 </div>
                 @if (!string.IsNullOrWhiteSpace(_authError))
                 {
                     <div class="validation-message" style="margin-top: 0.6rem;">@_authError</div>
                 }
-                <button type="button" class="btn btn-primary" style="margin-top: 1.25rem;" @onclick="UnlockAsync" disabled="@_loading">
+                <button type="submit" class="btn btn-primary" style="margin-top: 1.25rem;" disabled="@_loading">
                     @(_loading ? "Checking..." : "Unlock Portal")
                 </button>
-            </div>
+            </form>
         }
         else
         {
-            <div class="deposit-notice" style="margin-bottom: 1.75rem; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem;">
-                <span><strong style="color: #86efac;">Cross-Device Sync Active (Stripe Disabled):</strong> Booking requests, artist approvals, and slot locks persist across all devices. Deposits are simulated until Stripe is enabled.</span>
+            <div style="margin-bottom: 1.5rem; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem;">
+                <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem;">
+                    <label class="field-label" for="artist-filter" style="margin: 0;">Artist:</label>
+                    <select id="artist-filter" class="field-select" style="width: auto; min-width: 200px;" @bind="_artistFilter">
+                        <option value="All">All Artists (@_bookings.Count)</option>
+                        <option value="Dawn Yermasek">Dawn Yermasek</option>
+                        <option value="Tae">Tae</option>
+                        <option value="Kota">Kota</option>
+                        <option value="Kindra">Kindra</option>
+                        <option value="LaCinda">LaCinda</option>
+                        <option value="Heavenly Huckaby">Heavenly Huckaby</option>
+                        <option value="First Available Artist">First Available Artist</option>
+                    </select>
+                </div>
                 <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                    @if (_bookings.Count == 0)
-                    {
-                        <button type="button" class="btn btn-primary btn-sm" @onclick="SeedDemoAsync">Seed Demo Request</button>
-                    }
                     <button type="button" class="btn btn-outline btn-sm" @onclick="LoadBookingsAsync">Refresh</button>
+                    <button type="button" class="btn btn-outline btn-sm" @onclick="LockPortal">Lock</button>
                 </div>
             </div>
 
@@ -57,14 +66,15 @@
                 }
             </div>
 
+            @if (!string.IsNullOrWhiteSpace(_actionError))
+            {
+                <div class="validation-message" style="margin-bottom: 1rem;">@_actionError</div>
+            }
+
             @if (!FilteredBookings.Any())
             {
-                <div class="form-panel" style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem;">
-                    <p style="margin: 0; color: var(--text-ash);">No booking requests in this view yet.</p>
-                    @if (_bookings.Count == 0)
-                    {
-                        <button type="button" class="btn btn-primary btn-sm" @onclick="SeedDemoAsync">Seed Demo Request</button>
-                    }
+                <div class="form-panel">
+                    <p style="margin: 0; color: var(--text-ash);">No booking requests match this filter.</p>
                 </div>
             }
             else
@@ -79,13 +89,17 @@
                                     <h2 style="font-size: 1.65rem; margin: 0.35rem 0;">@b.Name &mdash; @b.ServiceType</h2>
                                     <div style="font-family: var(--font-mono); font-size: 0.84rem; color: var(--accent-gold);">
                                         @b.Date &middot; @b.TimeSlot &middot; Deposit: $@((b.DepositAmountCents / 100.0).ToString("0.00"))
+                                        @if (b.DepositPaid)
+                                        {
+                                            <span style="color: #86efac;"> &middot; Paid</span>
+                                        }
                                     </div>
                                 </div>
-                                <span class="status-badge @GetStatusClass(b.Status)">@b.Status</span>
+                                <span class="status-badge @GetStatusClass(b.Status)">@FormatStatus(b.Status)</span>
                             </div>
 
                             <p style="margin-bottom: 0.5rem;">
-                                <strong>Contact:</strong> <a href="tel:@b.Phone" style="color: var(--accent-gold);">@b.Phone</a> &middot; @b.Email
+                                <strong>Contact:</strong> <a href="tel:@b.Phone" style="color: var(--accent-gold);">@b.Phone</a> &middot; <a href="mailto:@b.Email" style="color: var(--text-bone);">@b.Email</a>
                                 @if (!string.IsNullOrWhiteSpace(b.Placement))
                                 {
                                     <span> &middot; <strong>Placement:</strong> @b.Placement</span>
@@ -114,14 +128,37 @@
                                 @if (b.Status is "PendingApproval" or "ApprovedAwaitingDeposit")
                                 {
                                     <button type="button" class="btn btn-outline btn-sm" @onclick="() => ConfirmManualAsync(b.Id)">
-                                        Simulate Deposit Paid
+                                        Mark Deposit Paid
                                     </button>
+                                }
+                                @if (b.Status == "PendingApproval")
+                                {
                                     <button type="button" class="btn btn-outline btn-sm" style="border-color: rgba(253,164,175,0.45); color: #fda4af;" @onclick="() => DeclineAsync(b.Id)">
                                         Decline
                                     </button>
                                 }
+                                @if (b.Status is "ApprovedAwaitingDeposit" or "Confirmed")
+                                {
+                                    <button type="button" class="btn btn-outline btn-sm" style="border-color: rgba(253,164,175,0.45); color: #fda4af;" @onclick="() => CancelAsync(b.Id)">
+                                        Cancel Appointment
+                                    </button>
+                                }
                                 <a href="/book?bookingId=@b.Id" class="btn btn-outline btn-sm">Client Status Link</a>
                                 <a href="@LocalBookingService.BuildIcsDataUri(b)" download="spectrum-tattoo-@(b.Id).ics" class="btn btn-outline btn-sm">.ics Calendar</a>
+
+                                @if (_confirmDeleteId == b.Id)
+                                {
+                                    <button type="button" class="btn btn-outline btn-sm" style="border-color: #f87171; color: #fca5a5;" @onclick="() => DeleteAsync(b.Id)">
+                                        Confirm Delete
+                                    </button>
+                                    <button type="button" class="btn btn-outline btn-sm" @onclick="() => _confirmDeleteId = null">Keep</button>
+                                }
+                                else
+                                {
+                                    <button type="button" class="btn btn-outline btn-sm" style="border-color: rgba(248,113,113,0.4); color: #fca5a5;" @onclick="() => _confirmDeleteId = b.Id">
+                                        Delete
+                                    </button>
+                                }
                             </div>
                         </article>
                     }
@@ -136,7 +173,10 @@
     private bool _unlocked;
     private bool _loading;
     private string? _authError;
+    private string? _actionError;
     private string _statusFilter = "All";
+    private string _artistFilter = "All";
+    private string? _confirmDeleteId;
     private List<LocalBookingRecord> _bookings = [];
     private readonly Dictionary<string, string> _notes = new();
     private readonly Dictionary<string, int> _depositDollars = new();
@@ -144,19 +184,25 @@
     private readonly (string Key, string Label)[] _statusTabs =
     [
         ("All", "All"),
-        ("PendingApproval", "Pending Approval"),
+        ("PendingApproval", "Pending"),
         ("ApprovedAwaitingDeposit", "Awaiting Deposit"),
         ("Confirmed", "Confirmed"),
+        ("Cancelled", "Cancelled"),
         ("Declined", "Declined")
     ];
 
+    private IEnumerable<LocalBookingRecord> ArtistFiltered =>
+        _artistFilter == "All"
+            ? _bookings
+            : _bookings.Where(b => string.Equals(b.Artist, _artistFilter, StringComparison.OrdinalIgnoreCase));
+
     private IEnumerable<LocalBookingRecord> FilteredBookings =>
         _statusFilter == "All"
-            ? _bookings
-            : _bookings.Where(b => b.Status == _statusFilter);
+            ? ArtistFiltered
+            : ArtistFiltered.Where(b => b.Status == _statusFilter);
 
     private int CountByStatus(string key) =>
-        key == "All" ? _bookings.Count : _bookings.Count(b => b.Status == key);
+        key == "All" ? ArtistFiltered.Count() : ArtistFiltered.Count(b => b.Status == key);
 
     private async Task UnlockAsync()
     {
@@ -174,8 +220,18 @@
         }
     }
 
+    private void LockPortal()
+    {
+        _unlocked = false;
+        _pin = string.Empty;
+        _bookings = [];
+        _confirmDeleteId = null;
+        _actionError = null;
+    }
+
     private async Task LoadBookingsAsync()
     {
+        _actionError = null;
         try
         {
             _bookings = await BookingService.ListAsync(_pin);
@@ -193,44 +249,70 @@
         }
         catch
         {
-            _authError = "Unable to reach shared booking service.";
+            _authError = "Unable to reach the booking service.";
         }
-    }
-
-    private async Task SeedDemoAsync()
-    {
-        await BookingService.SeedSampleAsync(_pin);
-        await LoadBookingsAsync();
     }
 
     private async Task ApproveAsync(string id)
     {
         var dollars = _depositDollars.TryGetValue(id, out var d) && d >= 10 ? d : 50;
         var note = _notes.TryGetValue(id, out var n) ? n : null;
-        await BookingService.UpdateStatusAsync(id, "approve", _pin, artistNote: note, depositCents: dollars * 100);
-        await LoadBookingsAsync();
+        await RunActionAsync(() => BookingService.UpdateStatusAsync(id, "approve", _pin, artistNote: note, depositCents: dollars * 100));
     }
 
     private async Task ConfirmManualAsync(string id)
     {
         var dollars = _depositDollars.TryGetValue(id, out var d) && d >= 10 ? d : 50;
         var note = _notes.TryGetValue(id, out var n) ? n : null;
-        await BookingService.UpdateStatusAsync(id, "confirm", _pin, artistNote: note, depositCents: dollars * 100);
-        await LoadBookingsAsync();
+        await RunActionAsync(() => BookingService.UpdateStatusAsync(id, "confirm", _pin, artistNote: note, depositCents: dollars * 100));
     }
 
     private async Task DeclineAsync(string id)
     {
         var note = _notes.TryGetValue(id, out var n) ? n : null;
-        await BookingService.UpdateStatusAsync(id, "decline", _pin, artistNote: note);
-        await LoadBookingsAsync();
+        await RunActionAsync(() => BookingService.UpdateStatusAsync(id, "decline", _pin, artistNote: note));
+    }
+
+    private async Task CancelAsync(string id)
+    {
+        var note = _notes.TryGetValue(id, out var n) ? n : null;
+        await RunActionAsync(() => BookingService.UpdateStatusAsync(id, "cancel", _pin, artistNote: note));
+    }
+
+    private async Task DeleteAsync(string id)
+    {
+        _confirmDeleteId = null;
+        await RunActionAsync(() => BookingService.UpdateStatusAsync(id, "delete", _pin));
+    }
+
+    private async Task RunActionAsync(Func<Task> action)
+    {
+        _actionError = null;
+        try
+        {
+            await action();
+            await LoadBookingsAsync();
+        }
+        catch
+        {
+            _actionError = "Could not complete that action. Please refresh and try again.";
+        }
     }
 
     private static string GetStatusClass(string status) => status switch
     {
         "Confirmed" => "status-confirmed",
         "ApprovedAwaitingDeposit" => "status-awaiting",
-        "Declined" => "status-declined",
+        "Declined" or "Cancelled" => "status-declined",
         _ => "status-pending"
+    };
+
+    private static string FormatStatus(string status) => status switch
+    {
+        "Confirmed" => "Confirmed",
+        "ApprovedAwaitingDeposit" => "Awaiting Deposit",
+        "Declined" => "Declined",
+        "Cancelled" => "Cancelled",
+        _ => "Pending Approval"
     };
 }
