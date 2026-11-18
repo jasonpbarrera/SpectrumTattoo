@@ -56,7 +56,7 @@ public sealed class BookingsFunction(
 
     [Function("bookings-availability")]
     public async Task<HttpResponseData> GetAvailability(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "bookings/availability")] HttpRequestData req)
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "availability")] HttpRequestData req)
     {
         var query = System.Web.HttpUtility.ParseQueryString(req.Url.Query);
         var artist = (query["artist"] ?? "First Available Artist").Trim();

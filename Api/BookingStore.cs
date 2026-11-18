@@ -1,6 +1,9 @@
 using System.Collections.Concurrent;
-using Azure;
-using Azure.Data.Tables;
+using System.Globalization;
+using System.Net.Http.Headers;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 
 namespace SpectrumTattoo.Api;
@@ -27,121 +30,88 @@ public sealed class BookingRecord
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
-public sealed class BookingEntity : ITableEntity
-{
-    public string PartitionKey { get; set; } = "BOOKING";
-    public string RowKey { get; set; } = string.Empty;
-    public DateTimeOffset? Timestamp { get; set; }
-    public ETag ETag { get; set; }
-
-    public string Artist { get; set; } = string.Empty;
-    public string Date { get; set; } = string.Empty;
-    public string TimeSlot { get; set; } = string.Empty;
-    public string ServiceType { get; set; } = string.Empty;
-    public string Name { get; set; } = string.Empty;
-    public string Phone { get; set; } = string.Empty;
-    public string Email { get; set; } = string.Empty;
-    public string Placement { get; set; } = string.Empty;
-    public string IdeaDescription { get; set; } = string.Empty;
-    public string Status { get; set; } = "PendingApproval";
-    public int DepositAmountCents { get; set; } = 5000;
-    public bool DepositPaid { get; set; }
-    public string? StripeSessionId { get; set; }
-    public string? StripeCheckoutUrl { get; set; }
-    public string? ArtistNote { get; set; }
-    public DateTimeOffset CreatedAt { get; set; }
-    public DateTimeOffset UpdatedAt { get; set; }
-
-    public static BookingEntity FromRecord(BookingRecord r) => new()
-    {
-        PartitionKey = "BOOKING",
-        RowKey = r.Id,
-        Artist = r.Artist,
-        Date = r.Date,
-        TimeSlot = r.TimeSlot,
-        ServiceType = r.ServiceType,
-        Name = r.Name,
-        Phone = r.Phone,
-        Email = r.Email,
-        Placement = r.Placement,
-        IdeaDescription = r.IdeaDescription,
-        Status = r.Status,
-        DepositAmountCents = r.DepositAmountCents,
-        DepositPaid = r.DepositPaid,
-        StripeSessionId = r.StripeSessionId,
-        StripeCheckoutUrl = r.StripeCheckoutUrl,
-        ArtistNote = r.ArtistNote,
-        CreatedAt = r.CreatedAt,
-        UpdatedAt = r.UpdatedAt
-    };
-
-    public BookingRecord ToRecord() => new()
-    {
-        Id = RowKey,
-        Artist = Artist,
-        Date = Date,
-        TimeSlot = TimeSlot,
-        ServiceType = ServiceType,
-        Name = Name,
-        Phone = Phone,
-        Email = Email,
-        Placement = Placement,
-        IdeaDescription = IdeaDescription,
-        Status = Status,
-        DepositAmountCents = DepositAmountCents,
-        DepositPaid = DepositPaid,
-        StripeSessionId = StripeSessionId,
-        StripeCheckoutUrl = StripeCheckoutUrl,
-        ArtistNote = ArtistNote,
-        CreatedAt = CreatedAt,
-        UpdatedAt = UpdatedAt
-    };
-}
-
 public sealed class BookingStore
 {
     private readonly ConcurrentDictionary<string, BookingRecord> _memory = new(StringComparer.OrdinalIgnoreCase);
-    private readonly TableClient? _tableClient;
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<BookingStore> _logger;
-    private bool _tableInitialized;
+    private readonly string? _accountName;
+    private readonly byte[]? _accountKey;
+    private readonly string? _tableEndpoint;
+    private bool _tableEnsured;
 
-    public BookingStore(ILogger<BookingStore> logger)
+    private static readonly JsonSerializerOptions JsonOpts = new()
     {
+        PropertyNameCaseInsensitive = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
+    public BookingStore(IHttpClientFactory httpClientFactory, ILogger<BookingStore> logger)
+    {
+        _httpClientFactory = httpClientFactory;
         _logger = logger;
+
         var conn = Environment.GetEnvironmentVariable("AZURE_STORAGE_CONNECTION_STRING")
                    ?? Environment.GetEnvironmentVariable("AzureWebJobsStorage");
 
         if (!string.IsNullOrWhiteSpace(conn) &&
             !conn.Contains("UseDevelopmentStorage=true", StringComparison.OrdinalIgnoreCase))
         {
-            try
+            var parts = conn.Split(';', StringSplitOptions.RemoveEmptyEntries)
+                .Select(p => p.Split('=', 2))
+                .Where(kv => kv.Length == 2)
+                .ToDictionary(kv => kv[0].Trim(), kv => kv[1].Trim(), StringComparer.OrdinalIgnoreCase);
+
+            if (parts.TryGetValue("AccountName", out var acct) &&
+                parts.TryGetValue("AccountKey", out var key))
             {
-                _tableClient = new TableClient(conn, "SpectrumBookings");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to configure Azure Table Storage; using in-memory booking store.");
+                _accountName = acct;
+                _accountKey = Convert.FromBase64String(key);
+                var suffix = parts.TryGetValue("EndpointSuffix", out var s) ? s : "core.windows.net";
+                _tableEndpoint = $"https://{acct}.table.{suffix}";
             }
         }
     }
 
-    private async Task<TableClient?> GetTableAsync()
+    private bool HasTableStorage => _accountName is not null && _accountKey is not null && _tableEndpoint is not null;
+
+    private HttpRequestMessage CreateTableRequest(HttpMethod method, string pathAndQuery, string? jsonBody = null)
     {
-        if (_tableClient is null) return null;
-        if (!_tableInitialized)
+        var dateHeader = DateTime.UtcNow.ToString("R", CultureInfo.InvariantCulture);
+        var resourcePath = pathAndQuery.Split('?')[0];
+        var stringToSign = $"{dateHeader}\n/{_accountName}/{resourcePath.TrimStart('/')}";
+
+        using var hmac = new HMACSHA256(_accountKey!);
+        var signature = Convert.ToBase64String(hmac.ComputeHash(Encoding.UTF8.GetBytes(stringToSign)));
+
+        var req = new HttpRequestMessage(method, $"{_tableEndpoint}{pathAndQuery}");
+        req.Headers.Add("x-ms-date", dateHeader);
+        req.Headers.Add("x-ms-version", "2020-12-06");
+        req.Headers.Add("Accept", "application/json;odata=nometadata");
+        req.Headers.Authorization = new AuthenticationHeaderValue("SharedKeyLite", $"{_accountName}:{signature}");
+
+        if (jsonBody is not null)
         {
-            try
-            {
-                await _tableClient.CreateIfNotExistsAsync();
-                _tableInitialized = true;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Azure Table Storage unavailable; falling back to in-memory store.");
-                return null;
-            }
+            req.Content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
         }
-        return _tableClient;
+
+        return req;
+    }
+
+    private async Task EnsureTableAsync()
+    {
+        if (!HasTableStorage || _tableEnsured) return;
+        try
+        {
+            var client = _httpClientFactory.CreateClient();
+            using var req = CreateTableRequest(HttpMethod.Post, "/Tables", "{\"TableName\":\"SpectrumBookings\"}");
+            using var resp = await client.SendAsync(req);
+            _tableEnsured = resp.IsSuccessStatusCode || resp.StatusCode == System.Net.HttpStatusCode.Conflict;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not ensure SpectrumBookings table; using in-memory store.");
+        }
     }
 
     public async Task SaveAsync(BookingRecord record)
@@ -149,31 +119,56 @@ public sealed class BookingStore
         record.UpdatedAt = DateTimeOffset.UtcNow;
         _memory[record.Id] = record;
 
-        var table = await GetTableAsync();
-        if (table is not null)
+        if (!HasTableStorage) return;
+        await EnsureTableAsync();
+
+        try
         {
-            await table.UpsertEntityAsync(BookingEntity.FromRecord(record), TableUpdateMode.Replace);
+            var client = _httpClientFactory.CreateClient();
+            var payloadJson = JsonSerializer.Serialize(new
+            {
+                PartitionKey = "BOOKING",
+                RowKey = record.Id,
+                Payload = JsonSerializer.Serialize(record, JsonOpts)
+            });
+            var path = $"/SpectrumBookings(PartitionKey='BOOKING',RowKey='{Uri.EscapeDataString(record.Id)}')";
+            using var req = CreateTableRequest(HttpMethod.Put, path, payloadJson);
+            await client.SendAsync(req);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to persist booking {Id} to Table Storage.", record.Id);
         }
     }
 
     public async Task<BookingRecord?> GetAsync(string id)
     {
-        var table = await GetTableAsync();
-        if (table is not null)
+        if (HasTableStorage)
         {
+            await EnsureTableAsync();
             try
             {
-                var resp = await table.GetEntityIfExistsAsync<BookingEntity>("BOOKING", id);
-                if (resp.HasValue && resp.Value is not null)
+                var client = _httpClientFactory.CreateClient();
+                var path = $"/SpectrumBookings(PartitionKey='BOOKING',RowKey='{Uri.EscapeDataString(id)}')";
+                using var req = CreateTableRequest(HttpMethod.Get, path);
+                using var resp = await client.SendAsync(req);
+                if (resp.IsSuccessStatusCode)
                 {
-                    var rec = resp.Value.ToRecord();
-                    _memory[rec.Id] = rec;
-                    return rec;
+                    using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+                    if (doc.RootElement.TryGetProperty("Payload", out var p))
+                    {
+                        var rec = JsonSerializer.Deserialize<BookingRecord>(p.GetString() ?? "{}", JsonOpts);
+                        if (rec is not null)
+                        {
+                            _memory[rec.Id] = rec;
+                            return rec;
+                        }
+                    }
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Error reading booking {Id} from Table Storage.", id);
+                _logger.LogWarning(ex, "Failed to read booking {Id} from Table Storage.", id);
             }
         }
 
@@ -182,23 +177,39 @@ public sealed class BookingStore
 
     public async Task<List<BookingRecord>> ListAsync()
     {
-        var table = await GetTableAsync();
-        if (table is not null)
+        if (HasTableStorage)
         {
+            await EnsureTableAsync();
             try
             {
-                var results = new List<BookingRecord>();
-                await foreach (var entity in table.QueryAsync<BookingEntity>(e => e.PartitionKey == "BOOKING"))
+                var client = _httpClientFactory.CreateClient();
+                using var req = CreateTableRequest(HttpMethod.Get, "/SpectrumBookings()?$filter=PartitionKey%20eq%20'BOOKING'");
+                using var resp = await client.SendAsync(req);
+                if (resp.IsSuccessStatusCode)
                 {
-                    var rec = entity.ToRecord();
-                    _memory[rec.Id] = rec;
-                    results.Add(rec);
+                    using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+                    if (doc.RootElement.TryGetProperty("value", out var arr) && arr.ValueKind == JsonValueKind.Array)
+                    {
+                        var list = new List<BookingRecord>();
+                        foreach (var item in arr.EnumerateArray())
+                        {
+                            if (item.TryGetProperty("Payload", out var p))
+                            {
+                                var rec = JsonSerializer.Deserialize<BookingRecord>(p.GetString() ?? "{}", JsonOpts);
+                                if (rec is not null)
+                                {
+                                    _memory[rec.Id] = rec;
+                                    list.Add(rec);
+                                }
+                            }
+                        }
+                        return list.OrderByDescending(r => r.CreatedAt).ToList();
+                    }
                 }
-                return results.OrderByDescending(r => r.CreatedAt).ToList();
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Error listing bookings from Table Storage.");
+                _logger.LogWarning(ex, "Failed to list bookings from Table Storage.");
             }
         }
 

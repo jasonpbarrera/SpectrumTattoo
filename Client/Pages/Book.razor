@@ -360,7 +360,7 @@
         _loadingSlots = true;
         try
         {
-            var url = $"api/bookings/availability?artist={Uri.EscapeDataString(_model.PreferredArtist)}&date={Uri.EscapeDataString(_model.Date)}";
+            var url = $"api/availability?artist={Uri.EscapeDataString(_model.PreferredArtist)}&date={Uri.EscapeDataString(_model.Date)}";
             var resp = await Http.GetFromJsonAsync<AvailabilityResponse>(url);
             if (resp is not null && resp.Ok)
             {
