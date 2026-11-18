@@ -65,8 +65,11 @@ public sealed class BookingRecord
 
 public sealed class BookingStore
 {
-    public const string PartitionKey = "spectrum-tattoo-bookings";
-    private const string ContainerId = "leads";
+    public const string PartitionKey = "spectrum-tattoo";
+    private readonly string _containerId =
+        Environment.GetEnvironmentVariable("COSMOS_BOOKINGS_CONTAINER") is { Length: > 0 } c
+            ? c.Trim()
+            : "spectrum-tattoo-bookings";
 
     private static readonly ConcurrentDictionary<string, BookingRecord> MemoryFallback = new(StringComparer.OrdinalIgnoreCase);
 
@@ -136,7 +139,7 @@ public sealed class BookingStore
         if (!_useCosmos)
             return MemoryFallback.Values.OrderByDescending(b => b.CreatedAt).ToList();
 
-        string resourceLink = $"dbs/{_databaseId}/colls/{ContainerId}";
+        string resourceLink = $"dbs/{_databaseId}/colls/{_containerId}";
         string requestUri = $"{_endpoint}/{resourceLink}/docs";
         string utcDate = DateTime.UtcNow.ToString("r", CultureInfo.InvariantCulture);
         string authHeader = GenerateCosmosAuthToken("post", "docs", resourceLink, utcDate, _key);
@@ -197,7 +200,7 @@ public sealed class BookingStore
             return (true, string.Empty);
         }
 
-        string resourceLink = $"dbs/{_databaseId}/colls/{ContainerId}";
+        string resourceLink = $"dbs/{_databaseId}/colls/{_containerId}";
         string requestUri = $"{_endpoint}/{resourceLink}/docs";
         string utcDate = DateTime.UtcNow.ToString("r", CultureInfo.InvariantCulture);
         string authHeader = GenerateCosmosAuthToken("post", "docs", resourceLink, utcDate, _key);

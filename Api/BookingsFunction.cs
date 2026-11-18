@@ -160,7 +160,12 @@ public class BookingsFunction(
                 return await JsonResponse(req, HttpStatusCode.Unauthorized, new { ok = false, error = "Invalid studio PIN." });
 
             var bookings = await store.ListAsync();
-            return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, bookings });
+            return await JsonResponse(req, HttpStatusCode.OK, new
+            {
+                ok = true,
+                storage = store.IsCosmosConfigured ? "cosmos" : "memory",
+                bookings
+            });
         }
 
         // POST: admin actions, simulated deposit, or new booking request
