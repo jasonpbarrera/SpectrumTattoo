@@ -86,7 +86,7 @@ public class BookingsFunction(
 
             if (op == "availability")
             {
-                var artist = (query.TryGetValue("artist", out var a) ? a : "First Available Artist").Trim();
+                var reqArtist = (query.TryGetValue("artist", out var a) ? a : "First Available Artist").Trim();
                 var dateStr = (query.TryGetValue("date", out var d) ? d : string.Empty).Trim();
 
                 if (!DateOnly.TryParseExact(dateStr, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
@@ -99,8 +99,8 @@ public class BookingsFunction(
                 var allBookings = await store.ListAsync();
                 var takenSlots = allBookings
                     .Where(b => string.Equals(b.Date, dateStr, StringComparison.OrdinalIgnoreCase)
-                                && (string.Equals(b.Artist, artist, StringComparison.OrdinalIgnoreCase)
-                                    || string.Equals(artist, "First Available Artist", StringComparison.OrdinalIgnoreCase))
+                                && (string.Equals(b.Artist, reqArtist, StringComparison.OrdinalIgnoreCase)
+                                    || string.Equals(reqArtist, "First Available Artist", StringComparison.OrdinalIgnoreCase))
                                 && b.Status is "Confirmed" or "ApprovedAwaitingDeposit")
                     .Select(b => b.TimeSlot)
                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
