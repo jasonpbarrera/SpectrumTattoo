@@ -44,10 +44,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
 
-      - name: Verify Azure Functions API Build
-        run: |
-          dotnet build Api/SpectrumTattoo.Api.csproj -c Release
-          rm -rf Api/bin Api/obj
+      - name: Publish Azure Functions API
+        run: dotnet publish Api/SpectrumTattoo.Api.csproj -c Release -o api_publish_output
 
       - name: Publish Blazor Client
         run: dotnet publish Client/SpectrumTattoo.Client.csproj -c Release -o publish_output
@@ -63,9 +61,10 @@ jobs:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           action: "upload"
           app_location: "publish_output/wwwroot"
-          api_location: "Api"
+          api_location: "api_publish_output"
           output_location: ""
           skip_app_build: true
+          skip_api_build: true
 
       - name: Submit URLs to IndexNow
         if: github.event_name == 'push'
