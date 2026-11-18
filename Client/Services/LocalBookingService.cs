@@ -29,7 +29,7 @@ public sealed record SlotAvailability(string Time, bool Available);
 
 public sealed class LocalBookingService(HttpClient http)
 {
-    private const string ApiBase = "https://www.jbdigitalservices.net/api/bookings";
+    private const string ApiBase = "api/bookings";
 
     private sealed record AvailabilityApiResponse(bool Ok, bool IsOpen, string? Note, List<SlotAvailability>? Slots);
     private sealed record SingleBookingApiResponse(bool Ok, string? Error, LocalBookingRecord? Booking);
