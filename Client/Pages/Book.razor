@@ -70,6 +70,7 @@
                                         <option value="Kota">Kota</option>
                                         <option value="Kindra">Kindra</option>
                                         <option value="LaCinda">LaCinda</option>
+                                        <option value="Heavenly Huckaby">Heavenly Huckaby</option>
                                     </InputSelect>
                                 </div>
                             </div>
@@ -166,6 +167,7 @@
             else if (query.Contains("artist=Kota", StringComparison.OrdinalIgnoreCase)) _model.PreferredArtist = "Kota";
             else if (query.Contains("artist=Kindra", StringComparison.OrdinalIgnoreCase)) _model.PreferredArtist = "Kindra";
             else if (query.Contains("artist=LaCinda", StringComparison.OrdinalIgnoreCase)) _model.PreferredArtist = "LaCinda";
+            else if (query.Contains("artist=Heavenly", StringComparison.OrdinalIgnoreCase)) _model.PreferredArtist = "Heavenly Huckaby";
 
             if (query.Contains("Cover-Up", StringComparison.OrdinalIgnoreCase)) _model.ServiceType = "Scar Cover-Up / Rework";
             else if (query.Contains("Piercing", StringComparison.OrdinalIgnoreCase)) _model.ServiceType = "Piercing / Jewelry";
