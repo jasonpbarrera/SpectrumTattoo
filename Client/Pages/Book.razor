@@ -356,11 +356,15 @@
         _loadingSlots = true;
         try
         {
-            var (isOpen, note, slots) = await BookingService.GetAvailabilityAsync(_model.PreferredArtist, _model.Date);
+            var (isOpen, note, slots, reachable) = await BookingService.GetAvailabilityAsync(_model.PreferredArtist, _model.Date);
             _isStudioOpen = isOpen;
             _scheduleNote = note;
             _slots = slots;
-            if (string.IsNullOrWhiteSpace(_model.TimeSlot) || !_slots.Any(s => s.Time == _model.TimeSlot && s.Available))
+            if (!reachable)
+            {
+                _model.TimeSlot = string.Empty;
+            }
+            else if (string.IsNullOrWhiteSpace(_model.TimeSlot) || !_slots.Any(s => s.Time == _model.TimeSlot && s.Available))
             {
                 _model.TimeSlot = _slots.FirstOrDefault(s => s.Available)?.Time ?? string.Empty;
             }
@@ -403,9 +407,14 @@
             _submitted = true;
             await LoadAvailabilityAsync();
         }
+        catch (InvalidOperationException ex)
+        {
+            _submitError = ex.Message;
+            await LoadAvailabilityAsync();
+        }
         catch
         {
-            _submitError = "Could not save booking request locally. Please try again.";
+            _submitError = "Could not reach the studio booking queue. Please call (423) 299-9111 directly.";
         }
         finally
         {
@@ -426,19 +435,25 @@
         var code = _lookupCode.Trim().ToUpperInvariant();
         if (string.IsNullOrWhiteSpace(code)) return;
 
-        var found = await BookingService.GetAsync(code);
-        if (found is not null)
+        try
         {
-            _lookupBooking = found;
-            return;
+            var found = await BookingService.GetAsync(code);
+            if (found is not null)
+            {
+                _lookupBooking = found;
+                return;
+            }
+            _lookupError = $"No booking found for code {code}.";
         }
-
-        _lookupError = $"No booking found for code {code}.";
+        catch
+        {
+            _lookupError = "Unable to reach the studio booking queue right now. Please call (423) 299-9111.";
+        }
     }
 
     private async Task SimulateDepositPaidAsync(string id)
     {
-        await BookingService.UpdateStatusAsync(id, "Confirmed", depositPaid: true);
+        await BookingService.UpdateStatusAsync(id, "simulate-deposit");
         _lookupBooking = await BookingService.GetAsync(id);
         if (_createdBooking is not null && string.Equals(_createdBooking.Id, id, StringComparison.OrdinalIgnoreCase))
             _createdBooking = _lookupBooking;

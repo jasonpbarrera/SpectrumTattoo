@@ -36,7 +36,7 @@
         else
         {
             <div class="deposit-notice" style="margin-bottom: 1.75rem; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem;">
-                <span><strong style="color: var(--accent-gold);">Simulated Mode (Stripe Disabled):</strong> Approvals, calendar slot locks, and deposits run locally in your browser (<code>localStorage</code>).</span>
+                <span><strong style="color: #86efac;">Cross-Device Sync Active (Stripe Disabled):</strong> Booking requests, artist approvals, and slot locks persist across all devices. Deposits are simulated until Stripe is enabled.</span>
                 <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
                     @if (_bookings.Count == 0)
                     {
@@ -132,7 +132,6 @@
 </section>
 
 @code {
-    private const string StudioPin = "4110";
     private string _pin = string.Empty;
     private bool _unlocked;
     private bool _loading;
@@ -165,14 +164,9 @@
         _loading = true;
         try
         {
-            if (!string.Equals(_pin.Trim(), StudioPin, StringComparison.Ordinal))
-            {
-                _authError = "Invalid studio PIN. (Demo PIN: 4110)";
-                return;
-            }
-
-            _unlocked = true;
             await LoadBookingsAsync();
+            if (_authError is null)
+                _unlocked = true;
         }
         finally
         {
@@ -182,19 +176,30 @@
 
     private async Task LoadBookingsAsync()
     {
-        _bookings = await BookingService.ListAsync();
-        foreach (var b in _bookings)
+        try
         {
-            if (!_notes.ContainsKey(b.Id))
-                _notes[b.Id] = b.ArtistNote ?? string.Empty;
-            if (!_depositDollars.ContainsKey(b.Id))
-                _depositDollars[b.Id] = Math.Max(10, b.DepositAmountCents / 100);
+            _bookings = await BookingService.ListAsync(_pin);
+            foreach (var b in _bookings)
+            {
+                if (!_notes.ContainsKey(b.Id))
+                    _notes[b.Id] = b.ArtistNote ?? string.Empty;
+                if (!_depositDollars.ContainsKey(b.Id))
+                    _depositDollars[b.Id] = Math.Max(10, b.DepositAmountCents / 100);
+            }
+        }
+        catch (UnauthorizedAccessException)
+        {
+            _authError = "Invalid studio PIN.";
+        }
+        catch
+        {
+            _authError = "Unable to reach shared booking service.";
         }
     }
 
     private async Task SeedDemoAsync()
     {
-        await BookingService.SeedSampleAsync();
+        await BookingService.SeedSampleAsync(_pin);
         await LoadBookingsAsync();
     }
 
@@ -202,7 +207,7 @@
     {
         var dollars = _depositDollars.TryGetValue(id, out var d) && d >= 10 ? d : 50;
         var note = _notes.TryGetValue(id, out var n) ? n : null;
-        await BookingService.UpdateStatusAsync(id, "ApprovedAwaitingDeposit", depositPaid: false, artistNote: note, depositCents: dollars * 100);
+        await BookingService.UpdateStatusAsync(id, "approve", _pin, artistNote: note, depositCents: dollars * 100);
         await LoadBookingsAsync();
     }
 
@@ -210,14 +215,14 @@
     {
         var dollars = _depositDollars.TryGetValue(id, out var d) && d >= 10 ? d : 50;
         var note = _notes.TryGetValue(id, out var n) ? n : null;
-        await BookingService.UpdateStatusAsync(id, "Confirmed", depositPaid: true, artistNote: note, depositCents: dollars * 100);
+        await BookingService.UpdateStatusAsync(id, "confirm", _pin, artistNote: note, depositCents: dollars * 100);
         await LoadBookingsAsync();
     }
 
     private async Task DeclineAsync(string id)
     {
         var note = _notes.TryGetValue(id, out var n) ? n : null;
-        await BookingService.UpdateStatusAsync(id, "Declined", depositPaid: false, artistNote: note);
+        await BookingService.UpdateStatusAsync(id, "decline", _pin, artistNote: note);
         await LoadBookingsAsync();
     }
 

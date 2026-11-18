@@ -1,7 +1,8 @@
 using System.Globalization;
+using System.Net;
+using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
-using Microsoft.JSInterop;
 
 namespace SpectrumTattoo.Client.Services;
 
@@ -26,126 +27,110 @@ public sealed class LocalBookingRecord
 
 public sealed record SlotAvailability(string Time, bool Available);
 
-public sealed class LocalBookingService(IJSRuntime js)
+public sealed class LocalBookingService(HttpClient http)
 {
-    private const string StorageKey = "spectrum_tattoo_bookings_v1";
-    private static readonly JsonSerializerOptions JsonOpts = new()
-    {
-        PropertyNameCaseInsensitive = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-    };
+    private const string ApiBase = "https://spectrum-tattoo-bookings.jbdigitalservices.workers.dev/bookings";
 
-    public async Task<List<LocalBookingRecord>> ListAsync()
+    private sealed record AvailabilityApiResponse(bool Ok, bool IsOpen, string? Note, List<SlotAvailability>? Slots);
+    private sealed record SingleBookingApiResponse(bool Ok, string? Error, LocalBookingRecord? Booking);
+    private sealed record ListBookingsApiResponse(bool Ok, string? Error, List<LocalBookingRecord>? Bookings);
+
+    public async Task<(bool IsOpen, string Note, List<SlotAvailability> Slots, bool Reachable)> GetAvailabilityAsync(string artist, string dateStr)
     {
         try
         {
-            var raw = await js.InvokeAsync<string?>("localStorage.getItem", StorageKey);
-            if (string.IsNullOrWhiteSpace(raw)) return [];
-            var items = JsonSerializer.Deserialize<List<LocalBookingRecord>>(raw, JsonOpts);
-            return items?.OrderByDescending(b => b.CreatedAt).ToList() ?? [];
+            var url = $"{ApiBase}?op=availability&artist={Uri.EscapeDataString(artist)}&date={Uri.EscapeDataString(dateStr)}";
+            var resp = await http.GetFromJsonAsync<AvailabilityApiResponse>(url);
+            if (resp is not null && resp.Ok)
+            {
+                return (resp.IsOpen, resp.Note ?? string.Empty, resp.Slots ?? [], true);
+            }
         }
         catch
         {
-            return [];
+            // Fall through to unreachable state
         }
-    }
 
-    private async Task SaveAllAsync(List<LocalBookingRecord> items)
-    {
-        var json = JsonSerializer.Serialize(items, JsonOpts);
-        await js.InvokeVoidAsync("localStorage.setItem", StorageKey, json);
+        return (false, "Shared booking calendar is temporarily unreachable. Please call (423) 299-9111 to book.", [], false);
     }
 
     public async Task<LocalBookingRecord?> GetAsync(string id)
     {
-        var all = await ListAsync();
-        return all.FirstOrDefault(b => string.Equals(b.Id, id.Trim(), StringComparison.OrdinalIgnoreCase));
+        var resp = await http.GetAsync($"{ApiBase}?id={Uri.EscapeDataString(id.Trim())}");
+        if (!resp.IsSuccessStatusCode) return null;
+        var body = await resp.Content.ReadFromJsonAsync<SingleBookingApiResponse>();
+        return body?.Ok == true ? body.Booking : null;
     }
 
     public async Task<LocalBookingRecord> CreateAsync(LocalBookingRecord record)
     {
-        var all = await ListAsync();
-        if (string.IsNullOrWhiteSpace(record.Id))
-            record.Id = $"ST-{Guid.NewGuid().ToString("N")[..6].ToUpperInvariant()}";
-        record.CreatedAt = DateTimeOffset.UtcNow;
-        all.Insert(0, record);
-        await SaveAllAsync(all);
-        return record;
-    }
-
-    public async Task UpdateStatusAsync(string id, string status, bool depositPaid, string? artistNote = null, int? depositCents = null)
-    {
-        var all = await ListAsync();
-        var item = all.FirstOrDefault(b => string.Equals(b.Id, id, StringComparison.OrdinalIgnoreCase));
-        if (item is null) return;
-
-        item.Status = status;
-        item.DepositPaid = depositPaid;
-        if (artistNote is not null) item.ArtistNote = artistNote;
-        if (depositCents is > 0) item.DepositAmountCents = depositCents.Value;
-        await SaveAllAsync(all);
-    }
-
-    public async Task SeedSampleAsync()
-    {
-        var all = await ListAsync();
-        if (all.Count > 0) return;
-
-        var nextOpen = DateOnly.FromDateTime(DateTime.Today.AddDays(1));
-        while (nextOpen.DayOfWeek is DayOfWeek.Monday or DayOfWeek.Tuesday)
-            nextOpen = nextOpen.AddDays(1);
-
-        all.Add(new LocalBookingRecord
+        var resp = await http.PostAsJsonAsync(ApiBase, new
         {
-            Id = "ST-DEMO01",
-            Artist = "Dawn Yermasek",
-            Date = nextOpen.ToString("yyyy-MM-dd"),
-            TimeSlot = "11:30 AM",
-            ServiceType = "Custom Tattoo",
-            Name = "Sample Client",
-            Phone = "(423) 555-0142",
-            Email = "client@example.com",
-            Placement = "Outer forearm, ~5 in",
-            IdeaDescription = "Watercolor luna moth with fine-line fern botanicals.",
-            Status = "PendingApproval",
-            DepositAmountCents = 5000,
-            CreatedAt = DateTimeOffset.UtcNow
+            artist = record.Artist,
+            date = record.Date,
+            timeSlot = record.TimeSlot,
+            serviceType = record.ServiceType,
+            name = record.Name,
+            phone = record.Phone,
+            email = record.Email,
+            placement = record.Placement,
+            ideaDescription = record.IdeaDescription
         });
-        await SaveAllAsync(all);
+
+        var body = await resp.Content.ReadFromJsonAsync<SingleBookingApiResponse>();
+        if (resp.IsSuccessStatusCode && body?.Ok == true && body.Booking is not null)
+        {
+            return body.Booking;
+        }
+
+        throw new InvalidOperationException(body?.Error ?? "Could not submit booking to the studio queue. Please call (423) 299-9111.");
     }
 
-    public async Task<(bool IsOpen, string Note, List<SlotAvailability> Slots)> GetAvailabilityAsync(string artist, string dateStr)
+    public async Task<List<LocalBookingRecord>> ListAsync(string pin)
     {
-        if (!DateOnly.TryParseExact(dateStr, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
-            return (false, "Select a valid date.", []);
+        using var req = new HttpRequestMessage(HttpMethod.Get, ApiBase);
+        req.Headers.Add("X-Studio-Pin", pin.Trim());
+        var resp = await http.SendAsync(req);
+        if (resp.StatusCode == HttpStatusCode.Unauthorized)
+            throw new UnauthorizedAccessException("Invalid studio PIN.");
 
-        if (date.DayOfWeek is DayOfWeek.Monday or DayOfWeek.Tuesday)
-            return (false, "Studio is closed Mondays & Tuesdays. Please select Wednesday–Sunday.", []);
+        resp.EnsureSuccessStatusCode();
+        var body = await resp.Content.ReadFromJsonAsync<ListBookingsApiResponse>();
+        return body?.Bookings ?? [];
+    }
 
-        string[] times = date.DayOfWeek switch
+    public async Task SeedSampleAsync(string pin)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, ApiBase)
         {
-            DayOfWeek.Saturday => ["10:00 AM", "11:30 AM", "1:00 PM", "2:30 PM"],
-            DayOfWeek.Sunday => ["10:00 AM", "11:30 AM", "1:00 PM"],
-            _ => ["10:00 AM", "11:30 AM", "1:00 PM", "2:30 PM", "4:00 PM"]
+            Content = JsonContent.Create(new { op = "seed" })
         };
+        req.Headers.Add("X-Studio-Pin", pin.Trim());
+        var resp = await http.SendAsync(req);
+        if (resp.StatusCode == HttpStatusCode.Unauthorized)
+            throw new UnauthorizedAccessException("Invalid studio PIN.");
+        resp.EnsureSuccessStatusCode();
+    }
 
-        var note = date.DayOfWeek == DayOfWeek.Saturday
-            ? "Saturday Hours: 10:00 AM – 4:00 PM"
-            : date.DayOfWeek == DayOfWeek.Sunday
-                ? "Sunday Hours: 10:00 AM – 3:00 PM"
-                : "Studio Hours: 10:00 AM – 6:00 PM";
+    public async Task UpdateStatusAsync(string id, string op, string? pin = null, string? artistNote = null, int? depositCents = null)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, ApiBase)
+        {
+            Content = JsonContent.Create(new
+            {
+                id,
+                op,
+                artistNote,
+                depositAmountCents = depositCents
+            })
+        };
+        if (!string.IsNullOrWhiteSpace(pin))
+            req.Headers.Add("X-Studio-Pin", pin.Trim());
 
-        var all = await ListAsync();
-        var taken = all
-            .Where(b => string.Equals(b.Date, dateStr, StringComparison.OrdinalIgnoreCase)
-                        && (string.Equals(b.Artist, artist, StringComparison.OrdinalIgnoreCase)
-                            || string.Equals(artist, "First Available Artist", StringComparison.OrdinalIgnoreCase))
-                        && b.Status is "Confirmed" or "ApprovedAwaitingDeposit")
-            .Select(b => b.TimeSlot)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        var slots = times.Select(t => new SlotAvailability(t, !taken.Contains(t))).ToList();
-        return (true, note, slots);
+        var resp = await http.SendAsync(req);
+        if (resp.StatusCode == HttpStatusCode.Unauthorized)
+            throw new UnauthorizedAccessException("Invalid studio PIN.");
+        resp.EnsureSuccessStatusCode();
     }
 
     public static string BuildIcsDataUri(LocalBookingRecord b)
