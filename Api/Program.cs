@@ -6,7 +6,6 @@ var host = new HostBuilder()
     .ConfigureServices(services =>
     {
         services.AddHttpClient();
-        services.AddSingleton<SpectrumTattoo.Api.BookingStore>();
     })
     .Build();
 

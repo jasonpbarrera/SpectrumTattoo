@@ -56,7 +56,7 @@
                 else if (_lookupBooking.Status == "Confirmed")
                 {
                     <div style="margin-top: 1.25rem; display: flex; flex-wrap: wrap; gap: 1rem; align-items: center;">
-                        <a href="/api/bookings/@_lookupBooking.Id/ics" class="btn btn-outline btn-sm">Add to Calendar (.ics)</a>
+                        <a href="/api/booking-ics?id=@_lookupBooking.Id" class="btn btn-outline btn-sm">Add to Calendar (.ics)</a>
                         <span style="font-size: 0.85rem; color: #86efac;">Deposit received &middot; Your appointment is locked in!</span>
                     </div>
                 }
@@ -78,7 +78,7 @@
                             <strong>Next Step:</strong> Once your artist approves the concept and timing, your non-refundable deposit ($@((_createdBooking.DepositAmountCents / 100.0).ToString("0"))) will lock in the slot. Save your booking code: <strong style="color: var(--accent-gold);">@_createdBooking.Id</strong>.
                         </div>
                         <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1.25rem;">
-                            <a href="/api/bookings/@_createdBooking.Id/ics" class="btn btn-outline btn-sm">Download Calendar Hold (.ics)</a>
+                            <a href="/api/booking-ics?id=@_createdBooking.Id" class="btn btn-outline btn-sm">Download Calendar Hold (.ics)</a>
                             <button type="button" class="btn btn-primary btn-sm" @onclick="CheckCreatedStatus">Refresh Booking Status</button>
                             <button type="button" class="btn btn-outline btn-sm" @onclick="ResetForm">Book Another Session</button>
                         </div>
@@ -495,7 +495,7 @@
 
         try
         {
-            var resp = await Http.GetFromJsonAsync<LookupBookingResponse>($"api/bookings/{Uri.EscapeDataString(code)}");
+            var resp = await Http.GetFromJsonAsync<LookupBookingResponse>($"api/bookings?id={Uri.EscapeDataString(code)}");
             if (resp?.Ok == true && resp.Booking is not null)
             {
                 _lookupBooking = resp.Booking;

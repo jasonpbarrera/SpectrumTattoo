@@ -34,7 +34,7 @@ public sealed class BookingStore
 {
     private readonly ConcurrentDictionary<string, BookingRecord> _memory = new(StringComparer.OrdinalIgnoreCase);
     private readonly IHttpClientFactory _httpClientFactory;
-    private readonly ILogger<BookingStore> _logger;
+    private readonly ILogger _logger;
     private readonly string? _accountName;
     private readonly byte[]? _accountKey;
     private readonly string? _tableEndpoint;
@@ -46,7 +46,7 @@ public sealed class BookingStore
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
-    public BookingStore(IHttpClientFactory httpClientFactory, ILogger<BookingStore> logger)
+    public BookingStore(IHttpClientFactory httpClientFactory, ILogger logger)
     {
         _httpClientFactory = httpClientFactory;
         _logger = logger;

@@ -11,7 +11,6 @@ using Microsoft.Extensions.Logging;
 namespace SpectrumTattoo.Api;
 
 public sealed class BookingsFunction(
-    BookingStore store,
     IHttpClientFactory httpClientFactory,
     ILogger<BookingsFunction> logger)
 {
@@ -20,6 +19,8 @@ public sealed class BookingsFunction(
         PropertyNameCaseInsensitive = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
+
+    private BookingStore CreateStore() => new(httpClientFactory, logger);
 
     public sealed record CreateBookingRequest(
         string Artist,
@@ -32,7 +33,11 @@ public sealed class BookingsFunction(
         string Placement,
         string IdeaDescription);
 
-    public sealed record DecisionRequest(string? ArtistNote, int? DepositAmountCents);
+    public sealed record BookingActionRequest(
+        string Id,
+        string Action,
+        string? ArtistNote,
+        int? DepositAmountCents);
 
     private static string GetAdminPin() =>
         Environment.GetEnvironmentVariable("STUDIO_ADMIN_PIN") ?? "4110";
@@ -54,13 +59,27 @@ public sealed class BookingsFunction(
         return string.Equals(provided, GetAdminPin(), StringComparison.Ordinal);
     }
 
-    [Function("bookings-availability")]
+    private static Dictionary<string, string> ParseQuery(string rawQuery)
+    {
+        var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(rawQuery)) return dict;
+        foreach (var pair in rawQuery.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var kv = pair.Split('=', 2);
+            var key = Uri.UnescapeDataString(kv[0].Replace('+', ' '));
+            var val = kv.Length > 1 ? Uri.UnescapeDataString(kv[1].Replace('+', ' ')) : string.Empty;
+            dict[key] = val;
+        }
+        return dict;
+    }
+
+    [Function("availability")]
     public async Task<HttpResponseData> GetAvailability(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "availability")] HttpRequestData req)
     {
-        var query = System.Web.HttpUtility.ParseQueryString(req.Url.Query);
-        var artist = (query["artist"] ?? "First Available Artist").Trim();
-        var dateStr = (query["date"] ?? string.Empty).Trim();
+        var query = ParseQuery(req.Url.Query);
+        var artist = (query.TryGetValue("artist", out var a) ? a : "First Available Artist").Trim();
+        var dateStr = (query.TryGetValue("date", out var d) ? d : string.Empty).Trim();
 
         if (!DateOnly.TryParseExact(dateStr, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
         {
@@ -69,6 +88,7 @@ public sealed class BookingsFunction(
             return bad;
         }
 
+        var store = CreateStore();
         var (isOpen, note, slots) = BookingStore.GetStudioSchedule(date);
         var allBookings = await store.ListAsync();
 
@@ -112,8 +132,45 @@ public sealed class BookingsFunction(
     public async Task<HttpResponseData> BookingsCollection(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", "post", Route = "bookings")] HttpRequestData req)
     {
+        var store = CreateStore();
+
         if (string.Equals(req.Method, "GET", StringComparison.OrdinalIgnoreCase))
         {
+            var query = ParseQuery(req.Url.Query);
+            if (query.TryGetValue("id", out var lookupId) && !string.IsNullOrWhiteSpace(lookupId))
+            {
+                var single = await store.GetAsync(lookupId.Trim());
+                if (single is null)
+                {
+                    var notFound = req.CreateResponse(HttpStatusCode.NotFound);
+                    await notFound.WriteAsJsonAsync(new { ok = false, error = "Booking not found." });
+                    return notFound;
+                }
+
+                var singleOk = req.CreateResponse(HttpStatusCode.OK);
+                await singleOk.WriteAsJsonAsync(new
+                {
+                    ok = true,
+                    booking = new
+                    {
+                        single.Id,
+                        single.Artist,
+                        single.Date,
+                        single.TimeSlot,
+                        single.ServiceType,
+                        single.Name,
+                        single.Status,
+                        single.DepositAmountCents,
+                        single.DepositPaid,
+                        single.StripeCheckoutUrl,
+                        single.ArtistNote,
+                        icsUrl = $"/api/booking-ics?id={single.Id}"
+                    },
+                    stripeConfigured = IsStripeConfigured()
+                });
+                return singleOk;
+            }
+
             if (!IsAuthorized(req))
             {
                 var unauth = req.CreateResponse(HttpStatusCode.Unauthorized);
@@ -216,51 +273,14 @@ public sealed class BookingsFunction(
         {
             ok = true,
             booking = record,
-            icsUrl = $"/api/bookings/{record.Id}/ics"
+            icsUrl = $"/api/booking-ics?id={record.Id}"
         });
         return ok;
     }
 
-    [Function("bookings-get")]
-    public async Task<HttpResponseData> GetBooking(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "bookings/{id}")] HttpRequestData req,
-        string id)
-    {
-        var booking = await store.GetAsync(id);
-        if (booking is null)
-        {
-            var notFound = req.CreateResponse(HttpStatusCode.NotFound);
-            await notFound.WriteAsJsonAsync(new { ok = false, error = "Booking not found." });
-            return notFound;
-        }
-
-        var ok = req.CreateResponse(HttpStatusCode.OK);
-        await ok.WriteAsJsonAsync(new
-        {
-            ok = true,
-            booking = new
-            {
-                booking.Id,
-                booking.Artist,
-                booking.Date,
-                booking.TimeSlot,
-                booking.ServiceType,
-                booking.Status,
-                booking.DepositAmountCents,
-                booking.DepositPaid,
-                booking.StripeCheckoutUrl,
-                booking.ArtistNote,
-                icsUrl = $"/api/bookings/{booking.Id}/ics"
-            },
-            stripeConfigured = IsStripeConfigured()
-        });
-        return ok;
-    }
-
-    [Function("bookings-approve")]
-    public async Task<HttpResponseData> ApproveBooking(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "bookings/{id}/approve")] HttpRequestData req,
-        string id)
+    [Function("booking-action")]
+    public async Task<HttpResponseData> BookingAction(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "booking-action")] HttpRequestData req)
     {
         if (!IsAuthorized(req))
         {
@@ -269,73 +289,27 @@ public sealed class BookingsFunction(
             return unauth;
         }
 
-        var booking = await store.GetAsync(id);
-        if (booking is null)
-        {
-            var notFound = req.CreateResponse(HttpStatusCode.NotFound);
-            await notFound.WriteAsJsonAsync(new { ok = false, error = "Booking not found." });
-            return notFound;
-        }
-
-        DecisionRequest? decision = null;
+        BookingActionRequest? payload;
         try
         {
-            decision = await JsonSerializer.DeserializeAsync<DecisionRequest>(req.Body, JsonOpts);
+            payload = await JsonSerializer.DeserializeAsync<BookingActionRequest>(req.Body, JsonOpts);
         }
         catch
         {
-            // Optional body
+            var bad = req.CreateResponse(HttpStatusCode.BadRequest);
+            await bad.WriteAsJsonAsync(new { ok = false, error = "Invalid action payload." });
+            return bad;
         }
 
-        if (decision?.DepositAmountCents is > 0)
+        if (payload is null || string.IsNullOrWhiteSpace(payload.Id) || string.IsNullOrWhiteSpace(payload.Action))
         {
-            booking.DepositAmountCents = decision.DepositAmountCents.Value;
+            var bad = req.CreateResponse(HttpStatusCode.BadRequest);
+            await bad.WriteAsJsonAsync(new { ok = false, error = "Booking id and action are required." });
+            return bad;
         }
 
-        if (!string.IsNullOrWhiteSpace(decision?.ArtistNote))
-        {
-            booking.ArtistNote = decision.ArtistNote.Trim();
-        }
-
-        booking.Status = "ApprovedAwaitingDeposit";
-
-        var stripeSecret = Environment.GetEnvironmentVariable("STRIPE_SECRET_KEY");
-        if (!string.IsNullOrWhiteSpace(stripeSecret))
-        {
-            var baseUrl = $"{req.Url.Scheme}://{req.Url.Authority}";
-            var session = await CreateStripeCheckoutSessionAsync(stripeSecret, booking, baseUrl);
-            if (session is not null)
-            {
-                booking.StripeSessionId = session.Value.SessionId;
-                booking.StripeCheckoutUrl = session.Value.CheckoutUrl;
-            }
-        }
-
-        await store.SaveAsync(booking);
-
-        var ok = req.CreateResponse(HttpStatusCode.OK);
-        await ok.WriteAsJsonAsync(new
-        {
-            ok = true,
-            stripeConfigured = IsStripeConfigured(),
-            booking
-        });
-        return ok;
-    }
-
-    [Function("bookings-confirm-manual")]
-    public async Task<HttpResponseData> ConfirmManual(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "bookings/{id}/confirm-manual")] HttpRequestData req,
-        string id)
-    {
-        if (!IsAuthorized(req))
-        {
-            var unauth = req.CreateResponse(HttpStatusCode.Unauthorized);
-            await unauth.WriteAsJsonAsync(new { ok = false, error = "Invalid studio PIN." });
-            return unauth;
-        }
-
-        var booking = await store.GetAsync(id);
+        var store = CreateStore();
+        var booking = await store.GetAsync(payload.Id.Trim());
         if (booking is null)
         {
             var notFound = req.CreateResponse(HttpStatusCode.NotFound);
@@ -343,57 +317,53 @@ public sealed class BookingsFunction(
             return notFound;
         }
 
-        booking.DepositPaid = true;
-        booking.Status = "Confirmed";
+        if (!string.IsNullOrWhiteSpace(payload.ArtistNote))
+            booking.ArtistNote = payload.ArtistNote.Trim();
+
+        switch (payload.Action.Trim().ToLowerInvariant())
+        {
+            case "approve":
+                if (payload.DepositAmountCents is > 0)
+                    booking.DepositAmountCents = payload.DepositAmountCents.Value;
+
+                booking.Status = "ApprovedAwaitingDeposit";
+                var stripeSecret = Environment.GetEnvironmentVariable("STRIPE_SECRET_KEY");
+                if (!string.IsNullOrWhiteSpace(stripeSecret))
+                {
+                    var baseUrl = $"{req.Url.Scheme}://{req.Url.Authority}";
+                    var session = await CreateStripeCheckoutSessionAsync(stripeSecret, booking, baseUrl);
+                    if (session is not null)
+                    {
+                        booking.StripeSessionId = session.Value.SessionId;
+                        booking.StripeCheckoutUrl = session.Value.CheckoutUrl;
+                    }
+                }
+                break;
+
+            case "confirm-manual":
+                booking.DepositPaid = true;
+                booking.Status = "Confirmed";
+                break;
+
+            case "decline":
+                booking.Status = "Declined";
+                break;
+
+            default:
+                var bad = req.CreateResponse(HttpStatusCode.BadRequest);
+                await bad.WriteAsJsonAsync(new { ok = false, error = "Unsupported action." });
+                return bad;
+        }
+
         await store.SaveAsync(booking);
-
         var ok = req.CreateResponse(HttpStatusCode.OK);
-        await ok.WriteAsJsonAsync(new { ok = true, booking });
-        return ok;
-    }
-
-    [Function("bookings-decline")]
-    public async Task<HttpResponseData> DeclineBooking(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "bookings/{id}/decline")] HttpRequestData req,
-        string id)
-    {
-        if (!IsAuthorized(req))
-        {
-            var unauth = req.CreateResponse(HttpStatusCode.Unauthorized);
-            await unauth.WriteAsJsonAsync(new { ok = false, error = "Invalid studio PIN." });
-            return unauth;
-        }
-
-        var booking = await store.GetAsync(id);
-        if (booking is null)
-        {
-            var notFound = req.CreateResponse(HttpStatusCode.NotFound);
-            await notFound.WriteAsJsonAsync(new { ok = false, error = "Booking not found." });
-            return notFound;
-        }
-
-        try
-        {
-            var decision = await JsonSerializer.DeserializeAsync<DecisionRequest>(req.Body, JsonOpts);
-            if (!string.IsNullOrWhiteSpace(decision?.ArtistNote))
-                booking.ArtistNote = decision.ArtistNote.Trim();
-        }
-        catch
-        {
-            // Optional body
-        }
-
-        booking.Status = "Declined";
-        await store.SaveAsync(booking);
-
-        var ok = req.CreateResponse(HttpStatusCode.OK);
-        await ok.WriteAsJsonAsync(new { ok = true, booking });
+        await ok.WriteAsJsonAsync(new { ok = true, stripeConfigured = IsStripeConfigured(), booking });
         return ok;
     }
 
     [Function("stripe-webhook")]
     public async Task<HttpResponseData> StripeWebhook(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "stripe/webhook")] HttpRequestData req)
+        [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "stripe-webhook")] HttpRequestData req)
     {
         using var reader = new StreamReader(req.Body, Encoding.UTF8);
         var rawBody = await reader.ReadToEndAsync();
@@ -425,6 +395,7 @@ public sealed class BookingsFunction(
                     var bookingId = bookingIdProp.GetString();
                     if (!string.IsNullOrWhiteSpace(bookingId))
                     {
+                        var store = CreateStore();
                         var booking = await store.GetAsync(bookingId);
                         if (booking is not null)
                         {
@@ -447,16 +418,18 @@ public sealed class BookingsFunction(
         return ok;
     }
 
-    [Function("bookings-ics")]
+    [Function("booking-ics")]
     public async Task<HttpResponseData> DownloadIcs(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "bookings/{id}/ics")] HttpRequestData req,
-        string id)
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "booking-ics")] HttpRequestData req)
     {
-        var booking = await store.GetAsync(id);
+        var query = ParseQuery(req.Url.Query);
+        if (!query.TryGetValue("id", out var id) || string.IsNullOrWhiteSpace(id))
+            return req.CreateResponse(HttpStatusCode.BadRequest);
+
+        var store = CreateStore();
+        var booking = await store.GetAsync(id.Trim());
         if (booking is null)
-        {
             return req.CreateResponse(HttpStatusCode.NotFound);
-        }
 
         DateTime.TryParseExact($"{booking.Date} {booking.TimeSlot}", "yyyy-MM-dd h:mm tt",
             CultureInfo.InvariantCulture, DateTimeStyles.None, out var startLocal);
