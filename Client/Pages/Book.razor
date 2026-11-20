@@ -19,7 +19,7 @@
 
         @if (_lookupBookings.Count > 0)
         {
-            <div style="display: flex; flex-direction: column; gap: 1.25rem; margin-bottom: 2.5rem;">
+            <div id="lookup-results" style="display: flex; flex-direction: column; gap: 1.25rem; margin-bottom: 2.5rem;">
                 @foreach (var item in _lookupBookings)
                 {
                     <div class="form-panel" style="border-color: var(--accent-gold);">
@@ -314,14 +314,20 @@
                 <div class="info-panel">
                     <span class="eyebrow">Check or Cancel Appointment</span>
                     <h2 style="font-size: 1.55rem; margin: 0.6rem 0 0.75rem;">Find Your Booking</h2>
-                    <form style="display: flex; gap: 0.5rem;" @onsubmit="LookupByCode">
-                        <input type="text" class="field-input" @bind="_lookupCode" placeholder="Phone # (423) 555-0199" aria-label="Phone number or booking code" />
-                        <button type="submit" class="btn btn-outline btn-sm">Find</button>
+                    <form style="display: flex; gap: 0.5rem;" @onsubmit="LookupByCode" @onsubmit:preventDefault="true">
+                        <input type="text" class="field-input" @bind="_lookupCode" @bind:event="oninput" placeholder="Phone # (423) 555-0199" aria-label="Phone number or booking code" />
+                        <button type="submit" class="btn btn-outline btn-sm" disabled="@_lookingUp">@(_lookingUp ? "..." : "Find")</button>
                     </form>
                     <p style="font-size: 0.78rem; color: var(--text-smoke); margin: 0.5rem 0 0;">Enter the phone number used when booking (or your booking code).</p>
                     @if (!string.IsNullOrWhiteSpace(_lookupError))
                     {
                         <div class="validation-message" style="margin-top: 0.5rem;">@_lookupError</div>
+                    }
+                    else if (_lookupBookings.Count > 0)
+                    {
+                        <p style="font-size: 0.82rem; color: #86efac; margin: 0.6rem 0 0;">
+                            Found @_lookupBookings.Count @(_lookupBookings.Count == 1 ? "booking" : "bookings") &mdash; <a href="#lookup-results" style="color: var(--accent-gold); text-decoration: underline;">view above</a>.
+                        </p>
                     }
                 </div>
 
@@ -588,18 +594,23 @@
         await LookupByCode();
     }
 
+    private bool _lookingUp;
+
     private async Task LookupByCode()
     {
         _lookupError = null;
         var term = _lookupCode.Trim();
         if (string.IsNullOrWhiteSpace(term)) return;
 
+        _lookingUp = true;
         try
         {
             var found = await BookingService.LookupAsync(term);
             if (found.Count > 0)
             {
                 _lookupBookings = found;
+                StateHasChanged();
+                try { await JS.InvokeVoidAsync("window.scrollTo", new { top = 0, behavior = "smooth" }); } catch { }
                 return;
             }
             _lookupBookings = [];
@@ -608,6 +619,10 @@
         catch
         {
             _lookupError = "Unable to reach the studio booking queue right now. Please call (423) 299-9111.";
+        }
+        finally
+        {
+            _lookingUp = false;
         }
     }
 
@@ -665,7 +680,7 @@
 
     private static string GetStatusClass(string status) => status switch
     {
-        "Confirmed" => "status-confirmed",
+        "Confirmed" or "Completed" => "status-confirmed",
         "ApprovedAwaitingDeposit" => "status-awaiting",
         "Declined" or "Cancelled" => "status-declined",
         _ => "status-pending"
@@ -674,6 +689,7 @@
     private static string FormatStatus(string status) => status switch
     {
         "Confirmed" => "Confirmed · Deposit Paid",
+        "Completed" => "Completed",
         "ApprovedAwaitingDeposit" => "Approved · Deposit Due",
         "Declined" => "Declined",
         "Cancelled" => "Cancelled",
