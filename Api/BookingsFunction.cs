@@ -184,6 +184,29 @@ public class BookingsFunction(
                 return icsResp;
             }
 
+            if (op == "client-prefill")
+            {
+                var phoneParam = query.TryGetValue("phone", out var pVal) ? pVal : string.Empty;
+                var digits = NormalizePhone(phoneParam);
+                if (digits.Length < 7)
+                    return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, found = false });
+
+                var allBookings = await store.ListAsync();
+                var profile = await store.GetClientProfileByPhoneAsync(digits, allBookings);
+                if (profile is null)
+                    return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, found = false });
+
+                // Intentionally exclude StudioNotes so artist notes remain private to studio staff
+                return await JsonResponse(req, HttpStatusCode.OK, new
+                {
+                    ok = true,
+                    found = true,
+                    name = profile.Name,
+                    email = profile.Email,
+                    preferredArtist = profile.PreferredArtist
+                });
+            }
+
             if (query.TryGetValue("lookup", out var lookupTerm) && !string.IsNullOrWhiteSpace(lookupTerm))
             {
                 var term = lookupTerm.Trim();
@@ -245,29 +268,6 @@ public class BookingsFunction(
                     return await JsonResponse(req, HttpStatusCode.NotFound, new { ok = false, error = "No bookings found for that phone number." });
 
                 return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, booking = matches[0], bookings = matches });
-            }
-
-            if (op == "client-prefill")
-            {
-                var phoneParam = query.TryGetValue("phone", out var pVal) ? pVal : string.Empty;
-                var digits = NormalizePhone(phoneParam);
-                if (digits.Length < 7)
-                    return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, found = false });
-
-                var allBookings = await store.ListAsync();
-                var profile = await store.GetClientProfileByPhoneAsync(digits, allBookings);
-                if (profile is null)
-                    return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, found = false });
-
-                // Intentionally exclude StudioNotes so artist notes remain private to studio staff
-                return await JsonResponse(req, HttpStatusCode.OK, new
-                {
-                    ok = true,
-                    found = true,
-                    name = profile.Name,
-                    email = profile.Email,
-                    preferredArtist = profile.PreferredArtist
-                });
             }
 
             if (query.TryGetValue("id", out var lookupId) && !string.IsNullOrWhiteSpace(lookupId))
