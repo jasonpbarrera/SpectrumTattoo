@@ -39,7 +39,8 @@ public class BookingsFunction(
         bool? AllDay,
         string? StartTime,
         string? Reason,
-        Dictionary<string, DaySchedule>? Days);
+        Dictionary<string, DaySchedule>? Days,
+        string? StudioNotes);
 
     private static List<string> SanitizeImages(List<string>? raw)
     {
@@ -246,6 +247,29 @@ public class BookingsFunction(
                 return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, booking = matches[0], bookings = matches });
             }
 
+            if (op == "client-prefill")
+            {
+                var phoneParam = query.TryGetValue("phone", out var pVal) ? pVal : string.Empty;
+                var digits = NormalizePhone(phoneParam);
+                if (digits.Length < 7)
+                    return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, found = false });
+
+                var allBookings = await store.ListAsync();
+                var profile = await store.GetClientProfileByPhoneAsync(digits, allBookings);
+                if (profile is null)
+                    return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, found = false });
+
+                // Intentionally exclude StudioNotes so artist notes remain private to studio staff
+                return await JsonResponse(req, HttpStatusCode.OK, new
+                {
+                    ok = true,
+                    found = true,
+                    name = profile.Name,
+                    email = profile.Email,
+                    preferredArtist = profile.PreferredArtist
+                });
+            }
+
             if (query.TryGetValue("id", out var lookupId) && !string.IsNullOrWhiteSpace(lookupId))
             {
                 var single = await store.GetAsync(lookupId.Trim());
@@ -265,6 +289,7 @@ public class BookingsFunction(
 
             var bookings = bookingsTaskAdmin.Result;
             await store.CleanupExpiredPhotosAsync(bookings);
+            var clients = await store.ListClientProfilesAsync(bookings);
 
             return await JsonResponse(req, HttpStatusCode.OK, new
             {
@@ -272,7 +297,8 @@ public class BookingsFunction(
                 storage = store.IsCosmosConfigured ? "cosmos" : "memory",
                 bookings,
                 blocks = blocksTaskAdmin.Result,
-                schedules = schedulesTaskAdmin.Result
+                schedules = schedulesTaskAdmin.Result,
+                clients
             });
         }
 
@@ -363,6 +389,31 @@ public class BookingsFunction(
                 return await JsonResponse(req, HttpStatusCode.BadGateway, new { ok = false, error = schedErr });
 
             return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, schedule = sched });
+        }
+
+        if (postOp == "save-client-profile")
+        {
+            if (!IsAuthorized(req))
+                return await JsonResponse(req, HttpStatusCode.Unauthorized, new { ok = false, error = "Invalid studio PIN." });
+
+            var phoneKey = NormalizePhone(payload.Phone);
+            if (phoneKey.Length < 7)
+                return await JsonResponse(req, HttpStatusCode.BadRequest, new { ok = false, error = "A valid phone number is required." });
+
+            var existingProfile = await store.GetClientProfileByPhoneAsync(phoneKey);
+            var profile = existingProfile ?? new ClientProfileRecord { PhoneKey = phoneKey };
+
+            if (!string.IsNullOrWhiteSpace(payload.Name)) profile.Name = payload.Name.Trim();
+            if (!string.IsNullOrWhiteSpace(payload.Phone)) profile.Phone = payload.Phone.Trim();
+            if (!string.IsNullOrWhiteSpace(payload.Email)) profile.Email = payload.Email.Trim();
+            if (!string.IsNullOrWhiteSpace(payload.Artist)) profile.PreferredArtist = payload.Artist.Trim();
+            if (payload.StudioNotes is not null) profile.StudioNotes = payload.StudioNotes.Trim();
+
+            var (savedProf, profErr) = await store.UpsertClientProfileAsync(profile);
+            if (!savedProf)
+                return await JsonResponse(req, HttpStatusCode.BadGateway, new { ok = false, error = profErr });
+
+            return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, client = profile });
         }
 
         if (postOp == "delete")
@@ -505,6 +556,7 @@ public class BookingsFunction(
         if (!ok)
             return await JsonResponse(req, HttpStatusCode.BadGateway, new { ok = false, error = err });
 
+        await store.SyncClientProfileFromBookingAsync(record);
         return await JsonResponse(req, HttpStatusCode.Created, new { ok = true, booking = record });
     }
 }

@@ -40,6 +40,9 @@
                     <button type="button" class="filter-pill @(_activeSection == "bookings" ? "active" : "")" @onclick='() => SetSection("bookings")'>
                         Bookings (@_bookings.Count)
                     </button>
+                    <button type="button" class="filter-pill @(_activeSection == "clients" ? "active" : "")" @onclick='() => SetSection("clients")'>
+                        Clients (@_clients.Count)
+                    </button>
                     <button type="button" class="filter-pill @(_activeSection == "blocks" ? "active" : "")" @onclick='() => SetSection("blocks")'>
                         Block Time Off (@_blocks.Count)
                     </button>
@@ -121,6 +124,32 @@
                                         <span> &middot; <strong>Placement:</strong> @b.Placement</span>
                                     }
                                 </p>
+                                @{
+                                    var clientProf = GetClientProfile(b.Phone);
+                                    var clientVisits = GetClientBookings(b.Phone);
+                                }
+                                <div style="margin: 0.65rem 0 0.85rem; padding: 0.7rem 0.9rem; border: 1px solid rgba(229,193,133,0.28); background: rgba(229,193,133,0.05); display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 0.75rem;">
+                                    <div style="flex: 1; min-width: 220px;">
+                                        <div style="font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent-gold); font-weight: 600;">
+                                            @(clientVisits.Count > 1 ? $"Returning Client · {clientVisits.Count} Appointments" : "Client Profile · 1st Request")
+                                        </div>
+                                        @if (!string.IsNullOrWhiteSpace(clientProf?.StudioNotes))
+                                        {
+                                            <div style="font-size: 0.88rem; color: var(--text-bone); margin-top: 0.25rem;">
+                                                <strong>Private Studio Notes:</strong> @clientProf.StudioNotes
+                                            </div>
+                                        }
+                                        else
+                                        {
+                                            <div style="font-size: 0.82rem; color: var(--text-smoke); margin-top: 0.2rem;">
+                                                No private studio notes yet.
+                                            </div>
+                                        }
+                                    </div>
+                                    <button type="button" class="btn btn-outline btn-sm" @onclick="() => OpenClientProfile(b.Phone)">
+                                        @(string.IsNullOrWhiteSpace(clientProf?.StudioNotes) ? "Add Client Note" : "Edit Client Profile")
+                                    </button>
+                                </div>
                                 <p style="margin-bottom: 0.75rem; color: var(--text-bone);">@b.IdeaDescription</p>
 
                                 @if (b.ReferenceImages is { Count: > 0 })
@@ -233,6 +262,86 @@
                                         </button>
                                     }
                                 </div>
+                            </article>
+                        }
+                    </div>
+                }
+            }
+            else if (_activeSection == "clients")
+            {
+                <div class="form-panel" style="margin-bottom: 1.5rem;">
+                    <span class="eyebrow">Private Studio Directory</span>
+                    <h2 style="font-size: 1.55rem; margin: 0.45rem 0 0.75rem;">Client Profiles &amp; Artist Notes</h2>
+                    <p style="font-size: 0.88rem; color: var(--text-ash); margin-bottom: 1rem;">
+                        Profiles are created automatically when clients book and are keyed by phone number. Studio notes are private to artists and never shown to clients.
+                    </p>
+                    <div class="field-group" style="max-width: 420px;">
+                        <label class="field-label" for="client-search">Lookup by Phone Number, Name, or Email</label>
+                        <input id="client-search" type="text" class="field-input" @bind="_clientSearch" @bind:event="oninput" placeholder="e.g. (423) 555-0199 or name" />
+                    </div>
+                </div>
+
+                @if (!FilteredClients.Any())
+                {
+                    <div class="form-panel">
+                        <p style="margin: 0; color: var(--text-ash);">No client profiles match your search.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="admin-booking-list">
+                        @foreach (var c in FilteredClients)
+                        {
+                            var history = GetClientBookings(c.PhoneKey);
+                            <article class="admin-booking-card">
+                                <div class="admin-booking-top">
+                                    <div>
+                                        <span class="eyebrow">@c.Phone &middot; @history.Count @(history.Count == 1 ? "Appointment" : "Appointments")</span>
+                                        <h2 style="font-size: 1.55rem; margin: 0.35rem 0;">@(string.IsNullOrWhiteSpace(c.Name) ? "Unnamed Client" : c.Name)</h2>
+                                        <div style="font-size: 0.88rem; color: var(--text-ash);">
+                                            <a href="tel:@c.Phone" style="color: var(--accent-gold);">@c.Phone</a>
+                                            @if (!string.IsNullOrWhiteSpace(c.Email))
+                                            {
+                                                <span> &middot; <a href="mailto:@c.Email" style="color: var(--text-bone);">@c.Email</a></span>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(c.PreferredArtist))
+                                            {
+                                                <span> &middot; Preferred Artist: <strong style="color: var(--text-bone);">@c.PreferredArtist</strong></span>
+                                            }
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="field-group" style="margin-top: 0.5rem;">
+                                    <label class="field-label">Private Studio / Artist Notes (hidden from client)</label>
+                                    <textarea rows="3" class="field-textarea" @bind="_clientNotes[c.PhoneKey]" placeholder="e.g. Sits great for long sessions, working on floral half-sleeve, prefers numbing spray, skin notes..."></textarea>
+                                </div>
+
+                                <div style="margin-top: 0.75rem;">
+                                    <button type="button" class="btn btn-primary btn-sm" @onclick="() => SaveClientNotesAsync(c)">Save Client Notes</button>
+                                </div>
+
+                                @if (history.Count > 0)
+                                {
+                                    <div style="margin-top: 1.15rem; padding-top: 0.9rem; border-top: 1px solid var(--hairline);">
+                                        <span class="field-label" style="display: block; margin-bottom: 0.5rem;">Appointment History</span>
+                                        <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                                            @foreach (var h in history)
+                                            {
+                                                <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 0.5rem; font-size: 0.86rem; padding: 0.45rem 0.65rem; background: rgba(255,255,255,0.02); border: 1px solid var(--hairline);">
+                                                    <div>
+                                                        <strong>@h.Date</strong> &middot; @h.TimeSlot@(!string.IsNullOrWhiteSpace(h.EndTime) ? $" – {h.EndTime}" : "") &middot; @h.Artist &middot; @h.ServiceType
+                                                        @if (!string.IsNullOrWhiteSpace(h.Placement))
+                                                        {
+                                                            <span style="color: var(--text-smoke);"> (@h.Placement)</span>
+                                                        }
+                                                    </div>
+                                                    <span class="status-badge @GetStatusClass(h.Status)">@FormatStatus(h.Status)</span>
+                                                </div>
+                                            }
+                                        </div>
+                                    </div>
+                                }
                             </article>
                         }
                     </div>
@@ -430,6 +539,10 @@
     private List<LocalBookingRecord> _bookings = [];
     private List<TimeBlockRecord> _blocks = [];
     private List<ArtistScheduleRecord> _schedules = [];
+    private List<ClientProfileRecord> _clients = [];
+
+    private string _clientSearch = string.Empty;
+    private readonly Dictionary<string, string> _clientNotes = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly Dictionary<string, string> _notes = new();
     private readonly Dictionary<string, int> _depositDollars = new();
@@ -504,6 +617,53 @@
         }
     }
 
+    private IEnumerable<ClientProfileRecord> FilteredClients
+    {
+        get
+        {
+            var term = _clientSearch.Trim();
+            if (string.IsNullOrWhiteSpace(term)) return _clients;
+            var digits = LocalBookingService.NormalizePhone(term);
+            return _clients.Where(c =>
+                (digits.Length >= 3 && c.PhoneKey.Contains(digits, StringComparison.OrdinalIgnoreCase))
+                || c.Name.Contains(term, StringComparison.OrdinalIgnoreCase)
+                || c.Email.Contains(term, StringComparison.OrdinalIgnoreCase)
+                || c.Phone.Contains(term, StringComparison.OrdinalIgnoreCase)
+                || c.StudioNotes.Contains(term, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    private ClientProfileRecord? GetClientProfile(string? phone)
+    {
+        var key = LocalBookingService.NormalizePhone(phone);
+        if (key.Length < 7) return null;
+        return _clients.FirstOrDefault(c => string.Equals(c.PhoneKey, key, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private List<LocalBookingRecord> GetClientBookings(string? phone)
+    {
+        var key = LocalBookingService.NormalizePhone(phone);
+        if (key.Length < 7) return [];
+        return _bookings
+            .Where(b => string.Equals(LocalBookingService.NormalizePhone(b.Phone), key, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(b => b.Date)
+            .ToList();
+    }
+
+    private void OpenClientProfile(string phone)
+    {
+        _clientSearch = phone;
+        SetSection("clients");
+    }
+
+    private async Task SaveClientNotesAsync(ClientProfileRecord c)
+    {
+        var notes = _clientNotes.TryGetValue(c.PhoneKey, out var n) ? n : string.Empty;
+        await RunActionAsync(
+            () => BookingService.SaveClientProfileAsync(_pin, c.Phone, c.Name, c.Email, notes),
+            $"Saved private notes for {(string.IsNullOrWhiteSpace(c.Name) ? c.Phone : c.Name)}.");
+    }
+
     private void LockPortal()
     {
         _unlocked = false;
@@ -511,6 +671,8 @@
         _bookings = [];
         _blocks = [];
         _schedules = [];
+        _clients = [];
+        _clientSearch = string.Empty;
         _confirmDeleteId = null;
         _lightboxImage = null;
         _actionError = null;
@@ -526,6 +688,12 @@
             _bookings = data.Bookings;
             _blocks = data.Blocks;
             _schedules = data.Schedules;
+            _clients = data.Clients;
+
+            foreach (var c in _clients)
+            {
+                _clientNotes[c.PhoneKey] = c.StudioNotes ?? string.Empty;
+            }
 
             foreach (var b in _bookings)
             {

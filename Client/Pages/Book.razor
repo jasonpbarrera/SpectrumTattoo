@@ -223,8 +223,12 @@
 
                                 <div class="field-group">
                                     <label class="field-label" for="client-phone">Phone Number *</label>
-                                    <InputText id="client-phone" class="field-input" @bind-Value="_model.Phone" placeholder="(423) 555-0199" />
+                                    <InputText id="client-phone" class="field-input" @bind-Value="_model.Phone" @onblur="OnPhoneBlurAsync" placeholder="(423) 555-0199" />
                                     <ValidationMessage For="@(() => _model.Phone)" class="validation-message" />
+                                    @if (_prefilledReturning)
+                                    {
+                                        <span style="font-size: 0.76rem; color: #86efac; margin-top: 0.25rem;">Welcome back! We filled in your contact info.</span>
+                                    }
                                 </div>
                             </div>
 
@@ -466,6 +470,33 @@
         {
             _loadingSlots = false;
         }
+    }
+
+    private bool _prefilledReturning;
+
+    private async Task OnPhoneBlurAsync()
+    {
+        var result = await BookingService.PrefillClientByPhoneAsync(_model.Phone);
+        if (!result.Found) return;
+
+        bool changed = false;
+        if (string.IsNullOrWhiteSpace(_model.Name) && !string.IsNullOrWhiteSpace(result.Name))
+        {
+            _model.Name = result.Name;
+            changed = true;
+        }
+        if (string.IsNullOrWhiteSpace(_model.Email) && !string.IsNullOrWhiteSpace(result.Email))
+        {
+            _model.Email = result.Email;
+            changed = true;
+        }
+        if (_model.PreferredArtist == "First Available Artist" && !string.IsNullOrWhiteSpace(result.PreferredArtist))
+        {
+            _model.PreferredArtist = result.PreferredArtist;
+            await LoadAvailabilityAsync();
+            changed = true;
+        }
+        if (changed) _prefilledReturning = true;
     }
 
     private async Task OnReferencePhotosSelected(ChangeEventArgs _)

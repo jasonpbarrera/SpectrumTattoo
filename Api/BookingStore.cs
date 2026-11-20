@@ -139,6 +139,39 @@ public sealed class ArtistScheduleRecord
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
+public sealed class ClientProfileRecord
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("businessId")]
+    public string BusinessId { get; set; } = BookingStore.PartitionKey;
+
+    [JsonPropertyName("docType")]
+    public string DocType { get; set; } = "client-profile";
+
+    [JsonPropertyName("phoneKey")]
+    public string PhoneKey { get; set; } = string.Empty;
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("phone")]
+    public string Phone { get; set; } = string.Empty;
+
+    [JsonPropertyName("email")]
+    public string Email { get; set; } = string.Empty;
+
+    [JsonPropertyName("preferredArtist")]
+    public string? PreferredArtist { get; set; }
+
+    [JsonPropertyName("studioNotes")]
+    public string StudioNotes { get; set; } = string.Empty;
+
+    [JsonPropertyName("updatedAt")]
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
 public sealed class BookingStore
 {
     public const string PartitionKey = "spectrum-tattoo";
@@ -161,6 +194,18 @@ public sealed class BookingStore
     private static readonly ConcurrentDictionary<string, BookingRecord> MemoryBookings = new(StringComparer.OrdinalIgnoreCase);
     private static readonly ConcurrentDictionary<string, TimeBlockRecord> MemoryBlocks = new(StringComparer.OrdinalIgnoreCase);
     private static readonly ConcurrentDictionary<string, ArtistScheduleRecord> MemorySchedules = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ConcurrentDictionary<string, ClientProfileRecord> MemoryClients = new(StringComparer.OrdinalIgnoreCase);
+
+    public static string NormalizePhone(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
+        var digits = new string(raw.Where(char.IsDigit).ToArray());
+        if (digits.Length == 11 && digits.StartsWith('1'))
+            digits = digits[1..];
+        return digits;
+    }
+
+    public static string MakeClientProfileId(string phoneKey) => $"client-{phoneKey}";
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -634,6 +679,104 @@ public sealed class BookingStore
         }
 
         return await UpsertDocAsync(schedule);
+    }
+
+    public async Task<List<ClientProfileRecord>> ListClientProfilesAsync(List<BookingRecord>? bookingsForBackfill = null)
+    {
+        List<ClientProfileRecord> stored;
+        if (!_useCosmos)
+            stored = MemoryClients.Values.ToList();
+        else
+            stored = await QueryAsync<ClientProfileRecord>(
+                $"SELECT * FROM c WHERE c.businessId = '{PartitionKey}' AND c.docType = 'client-profile'");
+
+        var byPhone = new Dictionary<string, ClientProfileRecord>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in stored)
+        {
+            var key = NormalizePhone(string.IsNullOrWhiteSpace(p.PhoneKey) ? p.Phone : p.PhoneKey);
+            if (key.Length >= 7)
+            {
+                p.PhoneKey = key;
+                byPhone[key] = p;
+            }
+        }
+
+        // Backfill profiles from existing bookings so repeat/prior clients appear automatically
+        if (bookingsForBackfill is not null)
+        {
+            foreach (var b in bookingsForBackfill.OrderByDescending(x => x.CreatedAt))
+            {
+                var key = NormalizePhone(b.Phone);
+                if (key.Length < 7) continue;
+                if (!byPhone.ContainsKey(key))
+                {
+                    byPhone[key] = new ClientProfileRecord
+                    {
+                        Id = MakeClientProfileId(key),
+                        PhoneKey = key,
+                        Name = b.Name,
+                        Phone = b.Phone,
+                        Email = b.Email,
+                        PreferredArtist = b.Artist,
+                        StudioNotes = string.Empty,
+                        UpdatedAt = b.CreatedAt
+                    };
+                }
+            }
+        }
+
+        return byPhone.Values.OrderByDescending(p => p.UpdatedAt).ToList();
+    }
+
+    public async Task<ClientProfileRecord?> GetClientProfileByPhoneAsync(string phone, List<BookingRecord>? bookingsForBackfill = null)
+    {
+        var key = NormalizePhone(phone);
+        if (key.Length < 7) return null;
+        var all = await ListClientProfilesAsync(bookingsForBackfill);
+        return all.FirstOrDefault(p => string.Equals(p.PhoneKey, key, StringComparison.OrdinalIgnoreCase));
+    }
+
+    public async Task<(bool Ok, string Error)> UpsertClientProfileAsync(ClientProfileRecord profile)
+    {
+        var key = NormalizePhone(string.IsNullOrWhiteSpace(profile.PhoneKey) ? profile.Phone : profile.PhoneKey);
+        if (key.Length < 7)
+            return (false, "A valid phone number is required.");
+
+        profile.PhoneKey = key;
+        profile.Id = MakeClientProfileId(key);
+        profile.BusinessId = PartitionKey;
+        profile.DocType = "client-profile";
+        profile.UpdatedAt = DateTimeOffset.UtcNow;
+
+        if (!_useCosmos)
+        {
+            MemoryClients[profile.Id] = profile;
+            return (true, string.Empty);
+        }
+
+        return await UpsertDocAsync(profile);
+    }
+
+    public async Task SyncClientProfileFromBookingAsync(BookingRecord booking)
+    {
+        var key = NormalizePhone(booking.Phone);
+        if (key.Length < 7) return;
+
+        var existing = await GetClientProfileByPhoneAsync(key);
+        var profile = existing ?? new ClientProfileRecord
+        {
+            Id = MakeClientProfileId(key),
+            PhoneKey = key,
+            StudioNotes = string.Empty
+        };
+
+        if (!string.IsNullOrWhiteSpace(booking.Name)) profile.Name = booking.Name;
+        if (!string.IsNullOrWhiteSpace(booking.Phone)) profile.Phone = booking.Phone;
+        if (!string.IsNullOrWhiteSpace(booking.Email)) profile.Email = booking.Email;
+        if (!string.IsNullOrWhiteSpace(booking.Artist) && !string.Equals(booking.Artist, "First Available Artist", StringComparison.OrdinalIgnoreCase))
+            profile.PreferredArtist = booking.Artist;
+
+        await UpsertClientProfileAsync(profile);
     }
 
     public async Task CleanupExpiredPhotosAsync(List<BookingRecord> bookings)

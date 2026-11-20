@@ -51,10 +51,25 @@ public sealed class ArtistScheduleRecord
     public Dictionary<string, DaySchedule> Days { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
+public sealed class ClientProfileRecord
+{
+    public string Id { get; set; } = string.Empty;
+    public string PhoneKey { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Phone { get; set; } = string.Empty;
+    public string Email { get; set; } = string.Empty;
+    public string? PreferredArtist { get; set; }
+    public string StudioNotes { get; set; } = string.Empty;
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+
+public sealed record ClientPrefillResult(bool Found, string? Name, string? Email, string? PreferredArtist);
+
 public sealed record AdminDashboardData(
     List<LocalBookingRecord> Bookings,
     List<TimeBlockRecord> Blocks,
-    List<ArtistScheduleRecord> Schedules);
+    List<ArtistScheduleRecord> Schedules,
+    List<ClientProfileRecord> Clients);
 
 public sealed record SlotAvailability(string Time, bool Available);
 
@@ -69,8 +84,36 @@ public sealed class LocalBookingService(HttpClient http)
         string? Error,
         List<LocalBookingRecord>? Bookings,
         List<TimeBlockRecord>? Blocks,
-        List<ArtistScheduleRecord>? Schedules);
+        List<ArtistScheduleRecord>? Schedules,
+        List<ClientProfileRecord>? Clients);
+    private sealed record PrefillApiResponse(bool Ok, bool Found, string? Name, string? Email, string? PreferredArtist);
     private sealed record BasicApiResponse(bool Ok, string? Error);
+
+    public static string NormalizePhone(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
+        var digits = new string(raw.Where(char.IsDigit).ToArray());
+        if (digits.Length == 11 && digits.StartsWith('1'))
+            digits = digits[1..];
+        return digits;
+    }
+
+    public async Task<ClientPrefillResult> PrefillClientByPhoneAsync(string phone)
+    {
+        var digits = NormalizePhone(phone);
+        if (digits.Length < 7) return new ClientPrefillResult(false, null, null, null);
+        try
+        {
+            var resp = await http.GetFromJsonAsync<PrefillApiResponse>($"{ApiBase}?op=client-prefill&phone={Uri.EscapeDataString(digits)}");
+            if (resp is not null && resp.Ok && resp.Found)
+                return new ClientPrefillResult(true, resp.Name, resp.Email, resp.PreferredArtist);
+        }
+        catch
+        {
+            // Ignore prefill errors silently
+        }
+        return new ClientPrefillResult(false, null, null, null);
+    }
 
     public async Task<(bool IsOpen, string Note, List<SlotAvailability> Slots, bool Reachable)> GetAvailabilityAsync(string artist, string dateStr)
     {
@@ -141,7 +184,33 @@ public sealed class LocalBookingService(HttpClient http)
         return new AdminDashboardData(
             body?.Bookings ?? [],
             body?.Blocks ?? [],
-            body?.Schedules ?? []);
+            body?.Schedules ?? [],
+            body?.Clients ?? []);
+    }
+
+    public async Task SaveClientProfileAsync(string pin, string phone, string name, string email, string studioNotes)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, ApiBase)
+        {
+            Content = JsonContent.Create(new
+            {
+                op = "save-client-profile",
+                phone,
+                name,
+                email,
+                studioNotes
+            })
+        };
+        req.Headers.Add("X-Studio-Pin", pin.Trim());
+        var resp = await http.SendAsync(req);
+        if (resp.StatusCode == HttpStatusCode.Unauthorized)
+            throw new UnauthorizedAccessException("Invalid studio PIN.");
+
+        if (!resp.IsSuccessStatusCode)
+        {
+            var errBody = await resp.Content.ReadFromJsonAsync<BasicApiResponse>();
+            throw new InvalidOperationException(errBody?.Error ?? "Could not save client profile.");
+        }
     }
 
     public async Task UpdateStatusAsync(
