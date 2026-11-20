@@ -142,7 +142,7 @@
                                 <div class="form-grid" style="grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); margin-top: 0.75rem;">
                                     <div class="field-group">
                                         <label class="field-label">Date</label>
-                                        <input type="date" class="field-input" @bind="_editDate[b.Id]" />
+                                        <input type="date" class="field-input" value="@_editDate[b.Id]" @onchange="e => _editDate[b.Id] = e.Value?.ToString() ?? b.Date" />
                                     </div>
                                     <div class="field-group">
                                         <label class="field-label">Start Time</label>
