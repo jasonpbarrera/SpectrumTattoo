@@ -11,7 +11,7 @@
             <span class="eyebrow">Artist &amp; Studio Portal</span>
             <h1 class="section-title">Booking <em>Approvals</em> &amp; Schedule</h1>
             <p>
-                Review incoming appointment requests, filter by artist, approve slots, manage deposits, or cancel and delete bookings.
+                Manage appointment requests, adjust session start and end times, block time off, and configure weekly artist schedules.
             </p>
         </div>
 
@@ -36,160 +36,353 @@
         else
         {
             <div style="margin-bottom: 1.5rem; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem;">
-                <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem;">
-                    <label class="field-label" for="artist-filter" style="margin: 0;">Artist:</label>
-                    <select id="artist-filter" class="field-select" style="width: auto; min-width: 200px;" @bind="_artistFilter">
-                        <option value="All">All Artists (@_bookings.Count)</option>
-                        <option value="Dawn Yermasek">Dawn Yermasek</option>
-                        <option value="Tae">Tae</option>
-                        <option value="Kota">Kota</option>
-                        <option value="Kindra">Kindra</option>
-                        <option value="LaCinda">LaCinda</option>
-                        <option value="Heavenly Huckaby">Heavenly Huckaby</option>
-                        <option value="First Available Artist">First Available Artist</option>
-                    </select>
+                <div class="gallery-filters" style="margin: 0;">
+                    <button type="button" class="filter-pill @(_activeSection == "bookings" ? "active" : "")" @onclick='() => SetSection("bookings")'>
+                        Bookings (@_bookings.Count)
+                    </button>
+                    <button type="button" class="filter-pill @(_activeSection == "blocks" ? "active" : "")" @onclick='() => SetSection("blocks")'>
+                        Block Time Off (@_blocks.Count)
+                    </button>
+                    <button type="button" class="filter-pill @(_activeSection == "schedules" ? "active" : "")" @onclick='() => SetSection("schedules")'>
+                        Artist Schedules
+                    </button>
                 </div>
                 <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                    <button type="button" class="btn btn-outline btn-sm" @onclick="LoadBookingsAsync">Refresh</button>
+                    <button type="button" class="btn btn-outline btn-sm" @onclick="LoadDashboardAsync">Refresh</button>
                     <button type="button" class="btn btn-outline btn-sm" @onclick="LockPortal">Lock</button>
                 </div>
             </div>
 
-            <div class="gallery-filters" style="margin-bottom: 1.5rem;">
-                @foreach (var tab in _statusTabs)
-                {
-                    <button type="button"
-                            class="filter-pill @(_statusFilter == tab.Key ? "active" : "")"
-                            @onclick="() => _statusFilter = tab.Key">
-                        @tab.Label (@CountByStatus(tab.Key))
-                    </button>
-                }
-            </div>
-
+            @if (!string.IsNullOrWhiteSpace(_actionNotice))
+            {
+                <div class="deposit-notice" style="margin-bottom: 1.25rem; border-color: rgba(134,239,172,0.5); color: #86efac;">@_actionNotice</div>
+            }
             @if (!string.IsNullOrWhiteSpace(_actionError))
             {
                 <div class="validation-message" style="margin-bottom: 1rem;">@_actionError</div>
             }
 
-            @if (!FilteredBookings.Any())
+            @if (_activeSection == "bookings")
             {
-                <div class="form-panel">
-                    <p style="margin: 0; color: var(--text-ash);">No booking requests match this filter.</p>
+                <div style="margin-bottom: 1.25rem; display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem;">
+                    <label class="field-label" for="artist-filter" style="margin: 0;">Artist:</label>
+                    <select id="artist-filter" class="field-select" style="width: auto; min-width: 210px;" @bind="_artistFilter">
+                        <option value="All">All Artists (@_bookings.Count)</option>
+                        @foreach (var a in _artists)
+                        {
+                            <option value="@a">@a</option>
+                        }
+                        <option value="First Available Artist">First Available Artist</option>
+                    </select>
                 </div>
-            }
-            else
-            {
-                <div class="admin-booking-list">
-                    @foreach (var b in FilteredBookings)
+
+                <div class="gallery-filters" style="margin-bottom: 1.5rem;">
+                    @foreach (var tab in _statusTabs)
                     {
-                        <article class="admin-booking-card">
-                            <div class="admin-booking-top">
-                                <div>
-                                    <span class="eyebrow">@b.Id &middot; @b.Artist</span>
-                                    <h2 style="font-size: 1.65rem; margin: 0.35rem 0;">@b.Name &mdash; @b.ServiceType</h2>
-                                    <div style="font-family: var(--font-mono); font-size: 0.84rem; color: var(--accent-gold);">
-                                        @b.Date &middot; @b.TimeSlot &middot; Deposit: $@((b.DepositAmountCents / 100.0).ToString("0.00"))
-                                        @if (b.DepositPaid)
-                                        {
-                                            <span style="color: #86efac;"> &middot; Paid</span>
-                                        }
+                        <button type="button"
+                                class="filter-pill @(_statusFilter == tab.Key ? "active" : "")"
+                                @onclick="() => _statusFilter = tab.Key">
+                            @tab.Label (@CountByStatus(tab.Key))
+                        </button>
+                    }
+                </div>
+
+                @if (!FilteredBookings.Any())
+                {
+                    <div class="form-panel">
+                        <p style="margin: 0; color: var(--text-ash);">No booking requests match this filter.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="admin-booking-list">
+                        @foreach (var b in FilteredBookings)
+                        {
+                            <article class="admin-booking-card">
+                                <div class="admin-booking-top">
+                                    <div>
+                                        <span class="eyebrow">@b.Id &middot; @b.Artist</span>
+                                        <h2 style="font-size: 1.65rem; margin: 0.35rem 0;">@b.Name &mdash; @b.ServiceType</h2>
+                                        <div style="font-family: var(--font-mono); font-size: 0.84rem; color: var(--accent-gold);">
+                                            @b.Date &middot; @b.TimeSlot@(!string.IsNullOrWhiteSpace(b.EndTime) ? $" – {b.EndTime}" : "") &middot; Deposit: $@((b.DepositAmountCents / 100.0).ToString("0.00"))
+                                            @if (b.DepositPaid)
+                                            {
+                                                <span style="color: #86efac;"> &middot; Paid</span>
+                                            }
+                                        </div>
                                     </div>
+                                    <span class="status-badge @GetStatusClass(b.Status)">@FormatStatus(b.Status)</span>
                                 </div>
-                                <span class="status-badge @GetStatusClass(b.Status)">@FormatStatus(b.Status)</span>
-                            </div>
 
-                            <p style="margin-bottom: 0.5rem;">
-                                <strong>Contact:</strong> <a href="tel:@b.Phone" style="color: var(--accent-gold);">@b.Phone</a> &middot; <a href="mailto:@b.Email" style="color: var(--text-bone);">@b.Email</a>
-                                @if (!string.IsNullOrWhiteSpace(b.Placement))
-                                {
-                                    <span> &middot; <strong>Placement:</strong> @b.Placement</span>
-                                }
-                            </p>
-                            <p style="margin-bottom: 0.75rem; color: var(--text-bone);">@b.IdeaDescription</p>
+                                <p style="margin-bottom: 0.5rem;">
+                                    <strong>Contact:</strong> <a href="tel:@b.Phone" style="color: var(--accent-gold);">@b.Phone</a> &middot; <a href="mailto:@b.Email" style="color: var(--text-bone);">@b.Email</a>
+                                    @if (!string.IsNullOrWhiteSpace(b.Placement))
+                                    {
+                                        <span> &middot; <strong>Placement:</strong> @b.Placement</span>
+                                    }
+                                </p>
+                                <p style="margin-bottom: 0.75rem; color: var(--text-bone);">@b.IdeaDescription</p>
 
-                            @if (b.ReferenceImages is { Count: > 0 })
-                            {
-                                <div style="margin-bottom: 0.85rem;">
-                                    <span class="field-label" style="display: block; margin-bottom: 0.35rem;">Client Reference Photos (click to zoom)</span>
-                                    <div class="ref-photo-grid">
-                                        @for (var i = 0; i < b.ReferenceImages.Count; i++)
-                                        {
-                                            var imgSrc = b.ReferenceImages[i];
-                                            <div class="ref-photo-item">
-                                                <img src="@imgSrc" alt="Reference photo @(i + 1) for @b.Name" @onclick="() => _lightboxImage = imgSrc" />
-                                            </div>
-                                        }
-                                    </div>
-                                </div>
-                            }
-
-                            <div class="form-grid form-grid-2" style="margin-top: 0.75rem;">
-                                <div class="field-group">
-                                    <label class="field-label">Artist Note (optional)</label>
-                                    <input type="text" class="field-input" @bind="_notes[b.Id]" placeholder="e.g. Please bring reference photo; 2-hour block" />
-                                </div>
-                                <div class="field-group">
-                                    <label class="field-label">Deposit Amount (USD)</label>
-                                    <input type="number" min="10" step="5" class="field-input" @bind="_depositDollars[b.Id]" />
-                                </div>
-                            </div>
-
-                            <div class="admin-actions-row">
-                                @if (b.Status == "PendingApproval")
-                                {
-                                    <button type="button" class="btn btn-primary btn-sm" @onclick="() => ApproveAsync(b.Id)">
-                                        Approve &amp; Request Deposit
-                                    </button>
-                                }
-                                @if (b.Status is "PendingApproval" or "ApprovedAwaitingDeposit")
-                                {
-                                    <button type="button" class="btn btn-outline btn-sm" @onclick="() => ConfirmManualAsync(b.Id)">
-                                        Mark Deposit Paid
-                                    </button>
-                                }
-                                @if (b.Status == "Confirmed")
-                                {
-                                    <button type="button" class="btn btn-primary btn-sm" @onclick="() => CompleteAsync(b.Id)">
-                                        Mark Completed
-                                    </button>
-                                }
-                                @if (b.Status == "PendingApproval")
-                                {
-                                    <button type="button" class="btn btn-outline btn-sm" style="border-color: rgba(253,164,175,0.45); color: #fda4af;" @onclick="() => DeclineAsync(b.Id)">
-                                        Decline
-                                    </button>
-                                }
-                                @if (b.Status is "ApprovedAwaitingDeposit" or "Confirmed")
-                                {
-                                    <button type="button" class="btn btn-outline btn-sm" style="border-color: rgba(253,164,175,0.45); color: #fda4af;" @onclick="() => CancelAsync(b.Id)">
-                                        Cancel Appointment
-                                    </button>
-                                }
                                 @if (b.ReferenceImages is { Count: > 0 })
                                 {
-                                    <button type="button" class="btn btn-outline btn-sm" @onclick="() => ClearPhotosAsync(b.Id)">
-                                        Clear Photos
-                                    </button>
+                                    <div style="margin-bottom: 0.85rem;">
+                                        <span class="field-label" style="display: block; margin-bottom: 0.35rem;">Client Reference Photos (click to zoom)</span>
+                                        <div class="ref-photo-grid">
+                                            @for (var i = 0; i < b.ReferenceImages.Count; i++)
+                                            {
+                                                var imgSrc = b.ReferenceImages[i];
+                                                <div class="ref-photo-item">
+                                                    <img src="@imgSrc" alt="Reference photo @(i + 1) for @b.Name" @onclick="() => _lightboxImage = imgSrc" />
+                                                </div>
+                                            }
+                                        </div>
+                                    </div>
                                 }
-                                <a href="/book?bookingId=@b.Id" class="btn btn-outline btn-sm">Client Status Link</a>
-                                <a href="@LocalBookingService.BuildIcsDataUri(b)" download="spectrum-tattoo-@(b.Id).ics" class="btn btn-outline btn-sm">.ics Calendar</a>
 
-                                @if (_confirmDeleteId == b.Id)
+                                <div class="form-grid" style="grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); margin-top: 0.75rem;">
+                                    <div class="field-group">
+                                        <label class="field-label">Date</label>
+                                        <input type="date" class="field-input" @bind="_editDate[b.Id]" />
+                                    </div>
+                                    <div class="field-group">
+                                        <label class="field-label">Start Time</label>
+                                        <select class="field-select" @bind="_editStart[b.Id]">
+                                            @foreach (var t in _timeOptions)
+                                            {
+                                                <option value="@t">@t</option>
+                                            }
+                                        </select>
+                                    </div>
+                                    <div class="field-group">
+                                        <label class="field-label">End Time</label>
+                                        <select class="field-select" @bind="_editEnd[b.Id]">
+                                            @foreach (var t in _timeOptions)
+                                            {
+                                                <option value="@t">@t</option>
+                                            }
+                                        </select>
+                                    </div>
+                                    <div class="field-group">
+                                        <label class="field-label">Deposit (USD)</label>
+                                        <input type="number" min="10" step="5" class="field-input" @bind="_depositDollars[b.Id]" />
+                                    </div>
+                                </div>
+
+                                <div class="field-group" style="margin-top: 0.75rem;">
+                                    <label class="field-label">Artist Note (optional)</label>
+                                    <input type="text" class="field-input" @bind="_notes[b.Id]" placeholder="e.g. Extended 3-hour block; please bring reference" />
+                                </div>
+
+                                <div class="admin-actions-row">
+                                    @if (b.Status == "PendingApproval")
+                                    {
+                                        <button type="button" class="btn btn-primary btn-sm" @onclick="() => ApproveAsync(b.Id)">
+                                            Approve &amp; Request Deposit
+                                        </button>
+                                    }
+                                    @if (b.Status is "PendingApproval" or "ApprovedAwaitingDeposit")
+                                    {
+                                        <button type="button" class="btn btn-outline btn-sm" @onclick="() => ConfirmManualAsync(b.Id)">
+                                            Mark Deposit Paid
+                                        </button>
+                                    }
+                                    @if (b.Status is "PendingApproval" or "ApprovedAwaitingDeposit" or "Confirmed")
+                                    {
+                                        <button type="button" class="btn btn-outline btn-sm" @onclick="() => SaveBookingEditsAsync(b.Id)">
+                                            Save Time &amp; Note
+                                        </button>
+                                    }
+                                    @if (b.Status == "Confirmed")
+                                    {
+                                        <button type="button" class="btn btn-primary btn-sm" @onclick="() => CompleteAsync(b.Id)">
+                                            Mark Completed
+                                        </button>
+                                    }
+                                    @if (b.Status == "PendingApproval")
+                                    {
+                                        <button type="button" class="btn btn-outline btn-sm" style="border-color: rgba(253,164,175,0.45); color: #fda4af;" @onclick="() => DeclineAsync(b.Id)">
+                                            Decline
+                                        </button>
+                                    }
+                                    @if (b.Status is "ApprovedAwaitingDeposit" or "Confirmed")
+                                    {
+                                        <button type="button" class="btn btn-outline btn-sm" style="border-color: rgba(253,164,175,0.45); color: #fda4af;" @onclick="() => CancelAsync(b.Id)">
+                                            Cancel Appointment
+                                        </button>
+                                    }
+                                    @if (b.ReferenceImages is { Count: > 0 })
+                                    {
+                                        <button type="button" class="btn btn-outline btn-sm" @onclick="() => ClearPhotosAsync(b.Id)">
+                                            Clear Photos
+                                        </button>
+                                    }
+                                    <a href="/book?bookingId=@b.Id" class="btn btn-outline btn-sm">Client Status Link</a>
+                                    <a href="@LocalBookingService.BuildIcsDataUri(b)" download="spectrum-tattoo-@(b.Id).ics" class="btn btn-outline btn-sm">.ics Calendar</a>
+
+                                    @if (_confirmDeleteId == b.Id)
+                                    {
+                                        <button type="button" class="btn btn-outline btn-sm" style="border-color: #f87171; color: #fca5a5;" @onclick="() => DeleteAsync(b.Id)">
+                                            Confirm Delete
+                                        </button>
+                                        <button type="button" class="btn btn-outline btn-sm" @onclick="() => _confirmDeleteId = null">Keep</button>
+                                    }
+                                    else
+                                    {
+                                        <button type="button" class="btn btn-outline btn-sm" style="border-color: rgba(248,113,113,0.4); color: #fca5a5;" @onclick="() => _confirmDeleteId = b.Id">
+                                            Delete
+                                        </button>
+                                    }
+                                </div>
+                            </article>
+                        }
+                    </div>
+                }
+            }
+            else if (_activeSection == "blocks")
+            {
+                <div class="form-panel" style="margin-bottom: 1.5rem;">
+                    <span class="eyebrow">Add Time Off / Closure</span>
+                    <h2 style="font-size: 1.55rem; margin: 0.45rem 0 1rem;">Block Out Calendar Time</h2>
+                    <div class="form-grid" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
+                        <div class="field-group">
+                            <label class="field-label" for="blk-artist">Artist</label>
+                            <select id="blk-artist" class="field-select" @bind="_newBlockArtist">
+                                <option value="All Artists">All Artists (Studio Closed)</option>
+                                @foreach (var a in _artists)
                                 {
-                                    <button type="button" class="btn btn-outline btn-sm" style="border-color: #f87171; color: #fca5a5;" @onclick="() => DeleteAsync(b.Id)">
-                                        Confirm Delete
-                                    </button>
-                                    <button type="button" class="btn btn-outline btn-sm" @onclick="() => _confirmDeleteId = null">Keep</button>
+                                    <option value="@a">@a</option>
                                 }
-                                else
-                                {
-                                    <button type="button" class="btn btn-outline btn-sm" style="border-color: rgba(248,113,113,0.4); color: #fca5a5;" @onclick="() => _confirmDeleteId = b.Id">
-                                        Delete
-                                    </button>
-                                }
+                            </select>
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="blk-date">Date</label>
+                            <input id="blk-date" type="date" class="field-input" @bind="_newBlockDate" />
+                        </div>
+                        <div class="field-group" style="justify-content: flex-end;">
+                            <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.9rem; color: var(--text-bone); padding: 0.6rem 0;">
+                                <input type="checkbox" @bind="_newBlockAllDay" />
+                                Full Day Off
+                            </label>
+                        </div>
+                    </div>
+
+                    @if (!_newBlockAllDay)
+                    {
+                        <div class="form-grid form-grid-2" style="margin-top: 0.75rem;">
+                            <div class="field-group">
+                                <label class="field-label" for="blk-start">Start Time</label>
+                                <select id="blk-start" class="field-select" @bind="_newBlockStart">
+                                    @foreach (var t in _timeOptions)
+                                    {
+                                        <option value="@t">@t</option>
+                                    }
+                                </select>
                             </div>
-                        </article>
+                            <div class="field-group">
+                                <label class="field-label" for="blk-end">End Time</label>
+                                <select id="blk-end" class="field-select" @bind="_newBlockEnd">
+                                    @foreach (var t in _timeOptions)
+                                    {
+                                        <option value="@t">@t</option>
+                                    }
+                                </select>
+                            </div>
+                        </div>
                     }
+
+                    <div class="field-group" style="margin-top: 0.75rem;">
+                        <label class="field-label" for="blk-reason">Reason (optional)</label>
+                        <input id="blk-reason" type="text" class="field-input" @bind="_newBlockReason" placeholder="e.g. Private full-day piece, Vacation, Holiday" />
+                    </div>
+
+                    <div style="margin-top: 1.1rem;">
+                        <button type="button" class="btn btn-primary btn-sm" @onclick="AddBlockAsync">Add Time Block</button>
+                    </div>
+                </div>
+
+                @if (_blocks.Count == 0)
+                {
+                    <div class="form-panel">
+                        <p style="margin: 0; color: var(--text-ash);">No upcoming time blocks configured.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="admin-booking-list">
+                        @foreach (var bl in _blocks)
+                        {
+                            <article class="admin-booking-card" style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem;">
+                                <div>
+                                    <span class="eyebrow">@bl.Artist</span>
+                                    <div style="font-size: 1.15rem; font-weight: 600; margin: 0.25rem 0;">
+                                        @bl.Date &middot; @(bl.AllDay ? "Full Day Off" : $"{bl.StartTime} – {bl.EndTime}")
+                                    </div>
+                                    @if (!string.IsNullOrWhiteSpace(bl.Reason))
+                                    {
+                                        <div style="font-size: 0.88rem; color: var(--text-ash);">@bl.Reason</div>
+                                    }
+                                </div>
+                                <button type="button" class="btn btn-outline btn-sm" style="border-color: rgba(248,113,113,0.45); color: #fca5a5;" @onclick="() => DeleteBlockAsync(bl.Id)">
+                                    Remove Block
+                                </button>
+                            </article>
+                        }
+                    </div>
+                }
+            }
+            else if (_activeSection == "schedules")
+            {
+                <div class="form-panel">
+                    <span class="eyebrow">Recurring Weekly Availability</span>
+                    <h2 style="font-size: 1.55rem; margin: 0.45rem 0 1rem;">Artist Weekly Schedule</h2>
+
+                    <div class="field-group" style="max-width: 300px; margin-bottom: 1.25rem;">
+                        <label class="field-label" for="sched-artist">Select Artist</label>
+                        <select id="sched-artist" class="field-select" value="@_selectedScheduleArtist" @onchange="OnScheduleArtistChanged">
+                            @foreach (var a in _artists)
+                            {
+                                <option value="@a">@a</option>
+                            }
+                        </select>
+                    </div>
+
+                    <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+                        @foreach (var dayName in _daysOfWeek)
+                        {
+                            if (_editingDays.TryGetValue(dayName, out var day))
+                            {
+                                <div style="display: grid; grid-template-columns: 140px 1fr 1fr; gap: 0.75rem; align-items: center; padding: 0.65rem 0.75rem; border: 1px solid var(--hairline); background: rgba(255,255,255,0.02);">
+                                    <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-weight: 600; color: @(day.Enabled ? "var(--text-bone)" : "var(--text-smoke)");">
+                                        <input type="checkbox" @bind="day.Enabled" />
+                                        @dayName
+                                    </label>
+                                    @if (day.Enabled)
+                                    {
+                                        <select class="field-select" @bind="day.StartTime">
+                                            @foreach (var t in _timeOptions)
+                                            {
+                                                <option value="@t">@t</option>
+                                            }
+                                        </select>
+                                        <select class="field-select" @bind="day.EndTime">
+                                            @foreach (var t in _timeOptions)
+                                            {
+                                                <option value="@t">@t</option>
+                                            }
+                                        </select>
+                                    }
+                                    else
+                                    {
+                                        <span style="grid-column: span 2; font-size: 0.85rem; color: var(--text-smoke);">Off / Unavailable</span>
+                                    }
+                                </div>
+                            }
+                        }
+                    </div>
+
+                    <div style="margin-top: 1.25rem;">
+                        <button type="button" class="btn btn-primary btn-sm" @onclick="SaveScheduleAsync">Save @_selectedScheduleArtist's Schedule</button>
+                    </div>
                 </div>
             }
         }
@@ -205,18 +398,54 @@
 }
 
 @code {
+    private static readonly string[] _artists =
+    [
+        "Dawn Yermasek",
+        "Tae",
+        "Kota",
+        "Kindra",
+        "LaCinda",
+        "Heavenly Huckaby"
+    ];
+
+    private static readonly string[] _daysOfWeek =
+    [
+        "Wednesday", "Thursday", "Friday", "Saturday", "Sunday", "Monday", "Tuesday"
+    ];
+
+    private static readonly string[] _timeOptions = BuildTimeOptions();
+
     private string _pin = string.Empty;
     private bool _unlocked;
     private bool _loading;
     private string? _authError;
     private string? _actionError;
+    private string? _actionNotice;
+    private string _activeSection = "bookings";
     private string _statusFilter = "All";
     private string _artistFilter = "All";
     private string? _confirmDeleteId;
     private string? _lightboxImage;
+
     private List<LocalBookingRecord> _bookings = [];
+    private List<TimeBlockRecord> _blocks = [];
+    private List<ArtistScheduleRecord> _schedules = [];
+
     private readonly Dictionary<string, string> _notes = new();
     private readonly Dictionary<string, int> _depositDollars = new();
+    private readonly Dictionary<string, string> _editDate = new();
+    private readonly Dictionary<string, string> _editStart = new();
+    private readonly Dictionary<string, string> _editEnd = new();
+
+    private string _newBlockArtist = "All Artists";
+    private DateOnly _newBlockDate = DateOnly.FromDateTime(DateTime.Today.AddDays(1));
+    private bool _newBlockAllDay = true;
+    private string _newBlockStart = "10:00 AM";
+    private string _newBlockEnd = "1:00 PM";
+    private string _newBlockReason = string.Empty;
+
+    private string _selectedScheduleArtist = "Dawn Yermasek";
+    private Dictionary<string, DaySchedule> _editingDays = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly (string Key, string Label)[] _statusTabs =
     [
@@ -228,6 +457,16 @@
         ("Cancelled", "Cancelled"),
         ("Declined", "Declined")
     ];
+
+    private static string[] BuildTimeOptions()
+    {
+        var list = new List<string>();
+        for (int mins = 8 * 60; mins <= 21 * 60; mins += 30)
+        {
+            list.Add(DateTime.Today.AddMinutes(mins).ToString("h:mm tt", System.Globalization.CultureInfo.InvariantCulture));
+        }
+        return [.. list];
+    }
 
     private IEnumerable<LocalBookingRecord> ArtistFiltered =>
         _artistFilter == "All"
@@ -242,13 +481,20 @@
     private int CountByStatus(string key) =>
         key == "All" ? ArtistFiltered.Count() : ArtistFiltered.Count(b => b.Status == key);
 
+    private void SetSection(string section)
+    {
+        _activeSection = section;
+        _actionError = null;
+        _actionNotice = null;
+    }
+
     private async Task UnlockAsync()
     {
         _authError = null;
         _loading = true;
         try
         {
-            await LoadBookingsAsync();
+            await LoadDashboardAsync();
             if (_authError is null)
                 _unlocked = true;
         }
@@ -263,24 +509,37 @@
         _unlocked = false;
         _pin = string.Empty;
         _bookings = [];
+        _blocks = [];
+        _schedules = [];
         _confirmDeleteId = null;
         _lightboxImage = null;
         _actionError = null;
+        _actionNotice = null;
     }
 
-    private async Task LoadBookingsAsync()
+    private async Task LoadDashboardAsync()
     {
         _actionError = null;
         try
         {
-            _bookings = await BookingService.ListAsync(_pin);
+            var data = await BookingService.LoadAdminDataAsync(_pin);
+            _bookings = data.Bookings;
+            _blocks = data.Blocks;
+            _schedules = data.Schedules;
+
             foreach (var b in _bookings)
             {
-                if (!_notes.ContainsKey(b.Id))
-                    _notes[b.Id] = b.ArtistNote ?? string.Empty;
-                if (!_depositDollars.ContainsKey(b.Id))
-                    _depositDollars[b.Id] = Math.Max(10, b.DepositAmountCents / 100);
+                _notes[b.Id] = b.ArtistNote ?? string.Empty;
+                _depositDollars[b.Id] = Math.Max(10, b.DepositAmountCents / 100);
+                _editDate[b.Id] = b.Date;
+                _editStart[b.Id] = _timeOptions.Contains(b.TimeSlot) ? b.TimeSlot : "10:00 AM";
+                var defaultEnd = ComputeDefaultEnd(b.TimeSlot);
+                _editEnd[b.Id] = !string.IsNullOrWhiteSpace(b.EndTime) && _timeOptions.Contains(b.EndTime)
+                    ? b.EndTime
+                    : defaultEnd;
             }
+
+            LoadEditingSchedule(_selectedScheduleArtist);
         }
         catch (UnauthorizedAccessException)
         {
@@ -292,56 +551,161 @@
         }
     }
 
+    private static string ComputeDefaultEnd(string start)
+    {
+        if (DateTime.TryParseExact(start, "h:mm tt", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var dt))
+            return dt.AddMinutes(90).ToString("h:mm tt", System.Globalization.CultureInfo.InvariantCulture);
+        return "11:30 AM";
+    }
+
+    private void OnScheduleArtistChanged(ChangeEventArgs e)
+    {
+        _selectedScheduleArtist = e.Value?.ToString() ?? _artists[0];
+        LoadEditingSchedule(_selectedScheduleArtist);
+    }
+
+    private void LoadEditingSchedule(string artist)
+    {
+        var found = _schedules.FirstOrDefault(s => string.Equals(s.Artist, artist, StringComparison.OrdinalIgnoreCase));
+        var map = new Dictionary<string, DaySchedule>(StringComparer.OrdinalIgnoreCase);
+        foreach (var d in _daysOfWeek)
+        {
+            if (found is not null && found.Days.TryGetValue(d, out var existing))
+            {
+                map[d] = new DaySchedule
+                {
+                    Enabled = existing.Enabled,
+                    StartTime = existing.StartTime,
+                    EndTime = existing.EndTime
+                };
+            }
+            else
+            {
+                map[d] = new DaySchedule
+                {
+                    Enabled = d is not "Monday" and not "Tuesday",
+                    StartTime = "10:00 AM",
+                    EndTime = d == "Saturday" ? "4:00 PM" : d == "Sunday" ? "3:00 PM" : "6:00 PM"
+                };
+            }
+        }
+        _editingDays = map;
+    }
+
+    private async Task SaveBookingEditsAsync(string id)
+    {
+        var dollars = _depositDollars.TryGetValue(id, out var d) && d >= 10 ? d : 50;
+        var note = _notes.TryGetValue(id, out var n) ? n : null;
+        var date = _editDate.TryGetValue(id, out var dt) ? dt : null;
+        var start = _editStart.TryGetValue(id, out var st) ? st : null;
+        var end = _editEnd.TryGetValue(id, out var en) ? en : null;
+        await RunActionAsync(
+            () => BookingService.UpdateStatusAsync(id, "update-booking", _pin, artistNote: note, depositCents: dollars * 100, date: date, timeSlot: start, endTime: end),
+            "Appointment time and details saved.");
+    }
+
     private async Task ApproveAsync(string id)
     {
         var dollars = _depositDollars.TryGetValue(id, out var d) && d >= 10 ? d : 50;
         var note = _notes.TryGetValue(id, out var n) ? n : null;
-        await RunActionAsync(() => BookingService.UpdateStatusAsync(id, "approve", _pin, artistNote: note, depositCents: dollars * 100));
+        var date = _editDate.TryGetValue(id, out var dt) ? dt : null;
+        var start = _editStart.TryGetValue(id, out var st) ? st : null;
+        var end = _editEnd.TryGetValue(id, out var en) ? en : null;
+        await RunActionAsync(
+            () => BookingService.UpdateStatusAsync(id, "approve", _pin, artistNote: note, depositCents: dollars * 100, date: date, timeSlot: start, endTime: end),
+            "Booking approved and time slot locked.");
     }
 
     private async Task ConfirmManualAsync(string id)
     {
         var dollars = _depositDollars.TryGetValue(id, out var d) && d >= 10 ? d : 50;
         var note = _notes.TryGetValue(id, out var n) ? n : null;
-        await RunActionAsync(() => BookingService.UpdateStatusAsync(id, "confirm", _pin, artistNote: note, depositCents: dollars * 100));
+        var date = _editDate.TryGetValue(id, out var dt) ? dt : null;
+        var start = _editStart.TryGetValue(id, out var st) ? st : null;
+        var end = _editEnd.TryGetValue(id, out var en) ? en : null;
+        await RunActionAsync(
+            () => BookingService.UpdateStatusAsync(id, "confirm", _pin, artistNote: note, depositCents: dollars * 100, date: date, timeSlot: start, endTime: end),
+            "Deposit recorded and appointment confirmed.");
     }
 
     private async Task CompleteAsync(string id)
     {
         var note = _notes.TryGetValue(id, out var n) ? n : null;
-        await RunActionAsync(() => BookingService.UpdateStatusAsync(id, "complete", _pin, artistNote: note));
+        await RunActionAsync(
+            () => BookingService.UpdateStatusAsync(id, "complete", _pin, artistNote: note),
+            "Appointment marked completed and reference photos cleared.");
     }
 
     private async Task ClearPhotosAsync(string id)
     {
-        await RunActionAsync(() => BookingService.UpdateStatusAsync(id, "clear-photos", _pin));
+        await RunActionAsync(
+            () => BookingService.UpdateStatusAsync(id, "clear-photos", _pin),
+            "Reference photos cleared.");
     }
 
     private async Task DeclineAsync(string id)
     {
         var note = _notes.TryGetValue(id, out var n) ? n : null;
-        await RunActionAsync(() => BookingService.UpdateStatusAsync(id, "decline", _pin, artistNote: note));
+        await RunActionAsync(
+            () => BookingService.UpdateStatusAsync(id, "decline", _pin, artistNote: note),
+            "Booking request declined.");
     }
 
     private async Task CancelAsync(string id)
     {
         var note = _notes.TryGetValue(id, out var n) ? n : null;
-        await RunActionAsync(() => BookingService.UpdateStatusAsync(id, "cancel", _pin, artistNote: note));
+        await RunActionAsync(
+            () => BookingService.UpdateStatusAsync(id, "cancel", _pin, artistNote: note),
+            "Appointment cancelled and slot released.");
     }
 
     private async Task DeleteAsync(string id)
     {
         _confirmDeleteId = null;
-        await RunActionAsync(() => BookingService.UpdateStatusAsync(id, "delete", _pin));
+        await RunActionAsync(
+            () => BookingService.UpdateStatusAsync(id, "delete", _pin),
+            "Booking permanently deleted.");
     }
 
-    private async Task RunActionAsync(Func<Task> action)
+    private async Task AddBlockAsync()
+    {
+        var isoDate = _newBlockDate.ToString("yyyy-MM-dd");
+        await RunActionAsync(
+            async () =>
+            {
+                await BookingService.AddBlockAsync(_pin, _newBlockArtist, isoDate, _newBlockAllDay, _newBlockStart, _newBlockEnd, _newBlockReason);
+                _newBlockReason = string.Empty;
+            },
+            $"Blocked {_newBlockArtist} on {isoDate}.");
+    }
+
+    private async Task DeleteBlockAsync(string blockId)
+    {
+        await RunActionAsync(
+            () => BookingService.DeleteBlockAsync(_pin, blockId),
+            "Time block removed.");
+    }
+
+    private async Task SaveScheduleAsync()
+    {
+        await RunActionAsync(
+            () => BookingService.SaveScheduleAsync(_pin, _selectedScheduleArtist, _editingDays),
+            $"Saved weekly schedule for {_selectedScheduleArtist}.");
+    }
+
+    private async Task RunActionAsync(Func<Task> action, string? successMessage = null)
     {
         _actionError = null;
+        _actionNotice = null;
         try
         {
             await action();
-            await LoadBookingsAsync();
+            await LoadDashboardAsync();
+            _actionNotice = successMessage;
+        }
+        catch (InvalidOperationException ex)
+        {
+            _actionError = ex.Message;
         }
         catch
         {

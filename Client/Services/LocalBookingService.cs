@@ -2,7 +2,6 @@ using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text;
-using System.Text.Json;
 
 namespace SpectrumTattoo.Client.Services;
 
@@ -12,19 +11,50 @@ public sealed class LocalBookingRecord
     public string Artist { get; set; } = string.Empty;
     public string Date { get; set; } = string.Empty;
     public string TimeSlot { get; set; } = string.Empty;
+    public string? EndTime { get; set; }
     public string ServiceType { get; set; } = "Custom Tattoo";
     public string Name { get; set; } = string.Empty;
     public string Phone { get; set; } = string.Empty;
     public string Email { get; set; } = string.Empty;
     public string Placement { get; set; } = string.Empty;
     public string IdeaDescription { get; set; } = string.Empty;
-    public string Status { get; set; } = "PendingApproval"; // PendingApproval | ApprovedAwaitingDeposit | Confirmed | Declined
+    public string Status { get; set; } = "PendingApproval";
     public int DepositAmountCents { get; set; } = 5000;
     public bool DepositPaid { get; set; }
     public string? ArtistNote { get; set; }
     public List<string> ReferenceImages { get; set; } = [];
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
+
+public sealed class TimeBlockRecord
+{
+    public string Id { get; set; } = string.Empty;
+    public string Artist { get; set; } = "All Artists";
+    public string Date { get; set; } = string.Empty;
+    public bool AllDay { get; set; }
+    public string? StartTime { get; set; }
+    public string? EndTime { get; set; }
+    public string? Reason { get; set; }
+}
+
+public sealed class DaySchedule
+{
+    public bool Enabled { get; set; }
+    public string StartTime { get; set; } = "10:00 AM";
+    public string EndTime { get; set; } = "6:00 PM";
+}
+
+public sealed class ArtistScheduleRecord
+{
+    public string Id { get; set; } = string.Empty;
+    public string Artist { get; set; } = string.Empty;
+    public Dictionary<string, DaySchedule> Days { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
+public sealed record AdminDashboardData(
+    List<LocalBookingRecord> Bookings,
+    List<TimeBlockRecord> Blocks,
+    List<ArtistScheduleRecord> Schedules);
 
 public sealed record SlotAvailability(string Time, bool Available);
 
@@ -34,7 +64,13 @@ public sealed class LocalBookingService(HttpClient http)
 
     private sealed record AvailabilityApiResponse(bool Ok, bool IsOpen, string? Note, List<SlotAvailability>? Slots);
     private sealed record SingleBookingApiResponse(bool Ok, string? Error, LocalBookingRecord? Booking);
-    private sealed record ListBookingsApiResponse(bool Ok, string? Error, List<LocalBookingRecord>? Bookings);
+    private sealed record ListBookingsApiResponse(
+        bool Ok,
+        string? Error,
+        List<LocalBookingRecord>? Bookings,
+        List<TimeBlockRecord>? Blocks,
+        List<ArtistScheduleRecord>? Schedules);
+    private sealed record BasicApiResponse(bool Ok, string? Error);
 
     public async Task<(bool IsOpen, string Note, List<SlotAvailability> Slots, bool Reachable)> GetAvailabilityAsync(string artist, string dateStr)
     {
@@ -43,9 +79,7 @@ public sealed class LocalBookingService(HttpClient http)
             var url = $"{ApiBase}?op=availability&artist={Uri.EscapeDataString(artist)}&date={Uri.EscapeDataString(dateStr)}";
             var resp = await http.GetFromJsonAsync<AvailabilityApiResponse>(url);
             if (resp is not null && resp.Ok)
-            {
                 return (resp.IsOpen, resp.Note ?? string.Empty, resp.Slots ?? [], true);
-            }
         }
         catch
         {
@@ -89,14 +123,12 @@ public sealed class LocalBookingService(HttpClient http)
 
         var body = await resp.Content.ReadFromJsonAsync<SingleBookingApiResponse>();
         if (resp.IsSuccessStatusCode && body?.Ok == true && body.Booking is not null)
-        {
             return body.Booking;
-        }
 
         throw new InvalidOperationException(body?.Error ?? "Could not submit booking to the studio queue. Please call (423) 299-9111.");
     }
 
-    public async Task<List<LocalBookingRecord>> ListAsync(string pin)
+    public async Task<AdminDashboardData> LoadAdminDataAsync(string pin)
     {
         using var req = new HttpRequestMessage(HttpMethod.Get, ApiBase);
         req.Headers.Add("X-Studio-Pin", pin.Trim());
@@ -106,23 +138,22 @@ public sealed class LocalBookingService(HttpClient http)
 
         resp.EnsureSuccessStatusCode();
         var body = await resp.Content.ReadFromJsonAsync<ListBookingsApiResponse>();
-        return body?.Bookings ?? [];
+        return new AdminDashboardData(
+            body?.Bookings ?? [],
+            body?.Blocks ?? [],
+            body?.Schedules ?? []);
     }
 
-    public async Task SeedSampleAsync(string pin)
-    {
-        using var req = new HttpRequestMessage(HttpMethod.Post, ApiBase)
-        {
-            Content = JsonContent.Create(new { op = "seed" })
-        };
-        req.Headers.Add("X-Studio-Pin", pin.Trim());
-        var resp = await http.SendAsync(req);
-        if (resp.StatusCode == HttpStatusCode.Unauthorized)
-            throw new UnauthorizedAccessException("Invalid studio PIN.");
-        resp.EnsureSuccessStatusCode();
-    }
-
-    public async Task UpdateStatusAsync(string id, string op, string? pin = null, string? artistNote = null, int? depositCents = null)
+    public async Task UpdateStatusAsync(
+        string id,
+        string op,
+        string? pin = null,
+        string? artistNote = null,
+        int? depositCents = null,
+        string? date = null,
+        string? timeSlot = null,
+        string? endTime = null,
+        string? artist = null)
     {
         using var req = new HttpRequestMessage(HttpMethod.Post, ApiBase)
         {
@@ -131,7 +162,11 @@ public sealed class LocalBookingService(HttpClient http)
                 id,
                 op,
                 artistNote,
-                depositAmountCents = depositCents
+                depositAmountCents = depositCents,
+                date,
+                timeSlot,
+                endTime,
+                artist
             })
         };
         if (!string.IsNullOrWhiteSpace(pin))
@@ -140,7 +175,70 @@ public sealed class LocalBookingService(HttpClient http)
         var resp = await http.SendAsync(req);
         if (resp.StatusCode == HttpStatusCode.Unauthorized)
             throw new UnauthorizedAccessException("Invalid studio PIN.");
+
+        if (!resp.IsSuccessStatusCode)
+        {
+            var errBody = await resp.Content.ReadFromJsonAsync<BasicApiResponse>();
+            throw new InvalidOperationException(errBody?.Error ?? "Action failed.");
+        }
+    }
+
+    public async Task AddBlockAsync(string pin, string artist, string date, bool allDay, string? startTime, string? endTime, string? reason)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, ApiBase)
+        {
+            Content = JsonContent.Create(new
+            {
+                op = "add-block",
+                artist,
+                date,
+                allDay,
+                startTime,
+                endTime,
+                reason
+            })
+        };
+        req.Headers.Add("X-Studio-Pin", pin.Trim());
+        var resp = await http.SendAsync(req);
+        if (resp.StatusCode == HttpStatusCode.Unauthorized)
+            throw new UnauthorizedAccessException("Invalid studio PIN.");
+
+        if (!resp.IsSuccessStatusCode)
+        {
+            var errBody = await resp.Content.ReadFromJsonAsync<BasicApiResponse>();
+            throw new InvalidOperationException(errBody?.Error ?? "Could not add time block.");
+        }
+    }
+
+    public async Task DeleteBlockAsync(string pin, string blockId)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, ApiBase)
+        {
+            Content = JsonContent.Create(new { op = "delete-block", id = blockId })
+        };
+        req.Headers.Add("X-Studio-Pin", pin.Trim());
+        var resp = await http.SendAsync(req);
+        if (resp.StatusCode == HttpStatusCode.Unauthorized)
+            throw new UnauthorizedAccessException("Invalid studio PIN.");
         resp.EnsureSuccessStatusCode();
+    }
+
+    public async Task SaveScheduleAsync(string pin, string artist, Dictionary<string, DaySchedule> days)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, ApiBase)
+        {
+            Content = JsonContent.Create(new { op = "save-schedule", artist, days })
+        };
+        req.Headers.Add("X-Studio-Pin", pin.Trim());
+        var resp = await http.SendAsync(req);
+        if (resp.StatusCode == HttpStatusCode.Unauthorized)
+            throw new UnauthorizedAccessException("Invalid studio PIN.");
+
+        if (!resp.IsSuccessStatusCode)
+        {
+            var errBody = await resp.Content.ReadFromJsonAsync<BasicApiResponse>();
+            throw new InvalidOperationException(errBody?.Error ?? "Could not save schedule.");
+        }
     }
 
     public static string BuildIcsDataUri(LocalBookingRecord b)
@@ -148,7 +246,15 @@ public sealed class LocalBookingService(HttpClient http)
         DateTime.TryParseExact($"{b.Date} {b.TimeSlot}", "yyyy-MM-dd h:mm tt",
             CultureInfo.InvariantCulture, DateTimeStyles.None, out var startLocal);
         if (startLocal == default) startLocal = DateTime.Now.AddDays(1);
+
         var endLocal = startLocal.AddMinutes(90);
+        if (!string.IsNullOrWhiteSpace(b.EndTime)
+            && DateTime.TryParseExact($"{b.Date} {b.EndTime}", "yyyy-MM-dd h:mm tt",
+                CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedEnd)
+            && parsedEnd > startLocal)
+        {
+            endLocal = parsedEnd;
+        }
 
         var ics = new StringBuilder()
             .AppendLine("BEGIN:VCALENDAR")

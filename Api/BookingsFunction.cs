@@ -28,13 +28,18 @@ public class BookingsFunction(
         string? Artist,
         string? Date,
         string? TimeSlot,
+        string? EndTime,
         string? ServiceType,
         string? Name,
         string? Phone,
         string? Email,
         string? Placement,
         string? IdeaDescription,
-        List<string>? ReferenceImages);
+        List<string>? ReferenceImages,
+        bool? AllDay,
+        string? StartTime,
+        string? Reason,
+        Dictionary<string, DaySchedule>? Days);
 
     private static List<string> SanitizeImages(List<string>? raw)
     {
@@ -120,21 +125,16 @@ public class BookingsFunction(
                 if (!DateOnly.TryParseExact(dateStr, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
                     return await JsonResponse(req, HttpStatusCode.BadRequest, new { ok = false, error = "Invalid date format. Expected yyyy-MM-dd." });
 
-                var (isOpen, note, slots) = BookingStore.GetStudioSchedule(date);
-                if (!isOpen)
-                    return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, isOpen = false, note, slots = Array.Empty<object>() });
+                var bookingsTask = store.ListAsync();
+                var blocksTask = store.ListBlocksAsync();
+                var schedulesTask = store.ListSchedulesAsync();
+                await Task.WhenAll(bookingsTask, blocksTask, schedulesTask);
 
-                var allBookings = await store.ListAsync();
-                var takenSlots = allBookings
-                    .Where(b => string.Equals(b.Date, dateStr, StringComparison.OrdinalIgnoreCase)
-                                && (string.Equals(b.Artist, reqArtist, StringComparison.OrdinalIgnoreCase)
-                                    || string.Equals(reqArtist, "First Available Artist", StringComparison.OrdinalIgnoreCase))
-                                && b.Status is "Confirmed" or "ApprovedAwaitingDeposit")
-                    .Select(b => b.TimeSlot)
-                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var (isOpen, note, slots) = BookingStore.ComputeAvailability(
+                    reqArtist, date, bookingsTask.Result, blocksTask.Result, schedulesTask.Result);
 
-                var slotList = slots.Select(s => new { time = s, available = !takenSlots.Contains(s) }).ToArray();
-                return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, isOpen = true, note, slots = slotList });
+                var slotPayload = slots.Select(s => new { time = s.Time, available = s.Available }).ToArray();
+                return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, isOpen, note, slots = slotPayload });
             }
 
             if (op == "ics")
@@ -151,7 +151,15 @@ public class BookingsFunction(
                 if (startLocal == default)
                     startLocal = DateTime.UtcNow.AddDays(1);
 
-                var endLocal = startLocal.AddMinutes(90);
+                DateTime endLocal = startLocal.AddMinutes(90);
+                if (!string.IsNullOrWhiteSpace(b.EndTime)
+                    && DateTime.TryParseExact($"{b.Date} {b.EndTime}", "yyyy-MM-dd h:mm tt",
+                        CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedEnd)
+                    && parsedEnd > startLocal)
+                {
+                    endLocal = parsedEnd;
+                }
+
                 var ics = new StringBuilder()
                     .AppendLine("BEGIN:VCALENDAR")
                     .AppendLine("VERSION:2.0")
@@ -190,6 +198,7 @@ public class BookingsFunction(
                         b.Artist,
                         b.Date,
                         b.TimeSlot,
+                        b.EndTime,
                         b.ServiceType,
                         b.Name,
                         b.Status,
@@ -220,6 +229,7 @@ public class BookingsFunction(
                         b.Artist,
                         b.Date,
                         b.TimeSlot,
+                        b.EndTime,
                         b.ServiceType,
                         b.Name,
                         b.Status,
@@ -248,17 +258,25 @@ public class BookingsFunction(
             if (!IsAuthorized(req))
                 return await JsonResponse(req, HttpStatusCode.Unauthorized, new { ok = false, error = "Invalid studio PIN." });
 
-            var bookings = await store.ListAsync();
+            var bookingsTaskAdmin = store.ListAsync();
+            var blocksTaskAdmin = store.ListBlocksAsync();
+            var schedulesTaskAdmin = store.ListSchedulesAsync();
+            await Task.WhenAll(bookingsTaskAdmin, blocksTaskAdmin, schedulesTaskAdmin);
+
+            var bookings = bookingsTaskAdmin.Result;
             await store.CleanupExpiredPhotosAsync(bookings);
+
             return await JsonResponse(req, HttpStatusCode.OK, new
             {
                 ok = true,
                 storage = store.IsCosmosConfigured ? "cosmos" : "memory",
-                bookings
+                bookings,
+                blocks = blocksTaskAdmin.Result,
+                schedules = schedulesTaskAdmin.Result
             });
         }
 
-        // POST: admin actions, simulated deposit, or new booking request
+        // POST: admin actions, schedules, blocks, simulated deposit, or new booking request
         BookingPostPayload? payload;
         try
         {
@@ -274,39 +292,77 @@ public class BookingsFunction(
 
         var postOp = (payload.Op ?? string.Empty).Trim().ToLowerInvariant();
 
-        if (postOp == "seed")
+        if (postOp == "add-block")
         {
             if (!IsAuthorized(req))
                 return await JsonResponse(req, HttpStatusCode.Unauthorized, new { ok = false, error = "Invalid studio PIN." });
 
-            var existing = await store.ListAsync();
-            if (existing.Count == 0)
-            {
-                var nextOpen = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(1));
-                while (nextOpen.DayOfWeek is DayOfWeek.Monday or DayOfWeek.Tuesday)
-                    nextOpen = nextOpen.AddDays(1);
+            var blkDate = (payload.Date ?? string.Empty).Trim();
+            if (!DateOnly.TryParseExact(blkDate, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
+                return await JsonResponse(req, HttpStatusCode.BadRequest, new { ok = false, error = "Please select a valid date." });
 
-                var demo = new BookingRecord
-                {
-                    Id = "ST-DEMO01",
-                    Artist = "Dawn Yermasek",
-                    Date = nextOpen.ToString("yyyy-MM-dd"),
-                    TimeSlot = "11:30 AM",
-                    ServiceType = "Custom Tattoo",
-                    Name = "Sample Client",
-                    Phone = "(423) 555-0142",
-                    Email = "client@example.com",
-                    Placement = "Outer forearm, ~5 in",
-                    IdeaDescription = "Watercolor luna moth with fine-line fern botanicals.",
-                    Status = "PendingApproval",
-                    DepositAmountCents = GetDefaultDepositCents(),
-                    DepositPaid = false,
-                    CreatedAt = DateTimeOffset.UtcNow
-                };
-                await store.UpsertAsync(demo);
+            bool allDay = payload.AllDay ?? false;
+            string? startT = allDay ? null : (payload.StartTime ?? "10:00 AM").Trim();
+            string? endT = allDay ? null : (payload.EndTime ?? "6:00 PM").Trim();
+
+            if (!allDay)
+            {
+                if (!BookingStore.TryParseMinutes(startT, out var sm) || !BookingStore.TryParseMinutes(endT, out var em) || em <= sm)
+                    return await JsonResponse(req, HttpStatusCode.BadRequest, new { ok = false, error = "End time must be after start time." });
             }
 
-            return await JsonResponse(req, HttpStatusCode.OK, new { ok = true });
+            var block = new TimeBlockRecord
+            {
+                Artist = string.IsNullOrWhiteSpace(payload.Artist) ? "All Artists" : payload.Artist.Trim(),
+                Date = blkDate,
+                AllDay = allDay,
+                StartTime = startT,
+                EndTime = endT,
+                Reason = string.IsNullOrWhiteSpace(payload.Reason) ? null : payload.Reason.Trim(),
+                CreatedAt = DateTimeOffset.UtcNow
+            };
+
+            var (savedBlk, blkErr) = await store.UpsertBlockAsync(block);
+            if (!savedBlk)
+                return await JsonResponse(req, HttpStatusCode.BadGateway, new { ok = false, error = blkErr });
+
+            return await JsonResponse(req, HttpStatusCode.Created, new { ok = true, block });
+        }
+
+        if (postOp == "delete-block")
+        {
+            if (!IsAuthorized(req))
+                return await JsonResponse(req, HttpStatusCode.Unauthorized, new { ok = false, error = "Invalid studio PIN." });
+
+            if (string.IsNullOrWhiteSpace(payload.Id))
+                return await JsonResponse(req, HttpStatusCode.BadRequest, new { ok = false, error = "Block id is required." });
+
+            var (delBlk, delBlkErr) = await store.DeleteBlockAsync(payload.Id);
+            if (!delBlk)
+                return await JsonResponse(req, HttpStatusCode.BadGateway, new { ok = false, error = delBlkErr });
+
+            return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, deletedId = payload.Id.Trim() });
+        }
+
+        if (postOp == "save-schedule")
+        {
+            if (!IsAuthorized(req))
+                return await JsonResponse(req, HttpStatusCode.Unauthorized, new { ok = false, error = "Invalid studio PIN." });
+
+            if (string.IsNullOrWhiteSpace(payload.Artist) || payload.Days is null || payload.Days.Count == 0)
+                return await JsonResponse(req, HttpStatusCode.BadRequest, new { ok = false, error = "Artist and weekly schedule days are required." });
+
+            var sched = new ArtistScheduleRecord
+            {
+                Artist = payload.Artist.Trim(),
+                Days = payload.Days
+            };
+
+            var (savedSched, schedErr) = await store.UpsertScheduleAsync(sched);
+            if (!savedSched)
+                return await JsonResponse(req, HttpStatusCode.BadGateway, new { ok = false, error = schedErr });
+
+            return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, schedule = sched });
         }
 
         if (postOp == "delete")
@@ -324,7 +380,7 @@ public class BookingsFunction(
             return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, deletedId = payload.Id.Trim() });
         }
 
-        if (postOp is "approve" or "confirm" or "confirm-manual" or "decline" or "cancel" or "complete" or "clear-photos" or "simulate-deposit")
+        if (postOp is "update-booking" or "approve" or "confirm" or "confirm-manual" or "decline" or "cancel" or "complete" or "clear-photos" or "simulate-deposit")
         {
             if (postOp is not "simulate-deposit" and not "cancel" && !IsAuthorized(req))
                 return await JsonResponse(req, HttpStatusCode.Unauthorized, new { ok = false, error = "Invalid studio PIN." });
@@ -335,6 +391,31 @@ public class BookingsFunction(
             var item = await store.GetAsync(payload.Id);
             if (item is null)
                 return await JsonResponse(req, HttpStatusCode.NotFound, new { ok = false, error = "Booking not found." });
+
+            // Allow artists/owners to edit Date, Start Time, End Time, and Artist
+            if (postOp is "update-booking" or "approve" or "confirm" or "confirm-manual")
+            {
+                if (!string.IsNullOrWhiteSpace(payload.Date)
+                    && DateOnly.TryParseExact(payload.Date.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
+                {
+                    item.Date = payload.Date.Trim();
+                }
+
+                if (!string.IsNullOrWhiteSpace(payload.Artist))
+                    item.Artist = payload.Artist.Trim();
+
+                if (!string.IsNullOrWhiteSpace(payload.TimeSlot) && BookingStore.TryParseMinutes(payload.TimeSlot, out var newStart))
+                {
+                    item.TimeSlot = BookingStore.FormatMinutes(newStart);
+                }
+
+                if (!string.IsNullOrWhiteSpace(payload.EndTime) && BookingStore.TryParseMinutes(payload.EndTime, out var newEnd))
+                {
+                    if (BookingStore.TryParseMinutes(item.TimeSlot, out var curStart) && newEnd <= curStart)
+                        return await JsonResponse(req, HttpStatusCode.BadRequest, new { ok = false, error = "End time must be after start time." });
+                    item.EndTime = BookingStore.FormatMinutes(newEnd);
+                }
+            }
 
             if (postOp == "approve")
             {
@@ -385,27 +466,28 @@ public class BookingsFunction(
         if (!DateOnly.TryParseExact(dateStrNew, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsedDate))
             return await JsonResponse(req, HttpStatusCode.BadRequest, new { ok = false, error = "Please select a valid date." });
 
-        var (studioOpen, _, validSlots) = BookingStore.GetStudioSchedule(parsedDate);
-        if (!studioOpen || !validSlots.Contains(timeSlot, StringComparer.OrdinalIgnoreCase))
+        var allBookingsTask = store.ListAsync();
+        var allBlocksTask = store.ListBlocksAsync();
+        var allSchedulesTask = store.ListSchedulesAsync();
+        await Task.WhenAll(allBookingsTask, allBlocksTask, allSchedulesTask);
+
+        var (studioOpen, _, computedSlots) = BookingStore.ComputeAvailability(
+            artist, parsedDate, allBookingsTask.Result, allBlocksTask.Result, allSchedulesTask.Result);
+
+        var matchedSlot = computedSlots.FirstOrDefault(s => string.Equals(s.Time, timeSlot, StringComparison.OrdinalIgnoreCase));
+        if (!studioOpen || string.IsNullOrEmpty(matchedSlot.Time))
             return await JsonResponse(req, HttpStatusCode.BadRequest, new { ok = false, error = "Selected date or time slot is not open." });
 
-        var currentBookings = await store.ListAsync();
-        var conflict = currentBookings.Any(b =>
-            string.Equals(b.Date, dateStrNew, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(b.TimeSlot, timeSlot, StringComparison.OrdinalIgnoreCase)
-            && (string.Equals(b.Artist, artist, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(artist, "First Available Artist", StringComparison.OrdinalIgnoreCase))
-            && b.Status is "Confirmed" or "ApprovedAwaitingDeposit");
-
-        if (conflict)
-            return await JsonResponse(req, HttpStatusCode.Conflict, new { ok = false, error = "That time slot was just booked. Please pick another slot." });
+        if (!matchedSlot.Available)
+            return await JsonResponse(req, HttpStatusCode.Conflict, new { ok = false, error = "That time slot is no longer available. Please pick another slot." });
 
         var record = new BookingRecord
         {
             Id = $"ST-{Guid.NewGuid().ToString("N")[..6].ToUpperInvariant()}",
             Artist = artist,
             Date = dateStrNew,
-            TimeSlot = timeSlot,
+            TimeSlot = matchedSlot.Time,
+            EndTime = BookingStore.ComputeDefaultEndTime(matchedSlot.Time),
             ServiceType = (payload.ServiceType ?? "Custom Tattoo").Trim(),
             Name = (payload.Name ?? string.Empty).Trim(),
             Phone = (payload.Phone ?? string.Empty).Trim(),

@@ -28,7 +28,7 @@
                                 <span class="eyebrow">Booking Status &middot; @item.Id</span>
                                 <h2 style="font-size: 1.85rem; margin: 0.4rem 0;">@item.ServiceType with @item.Artist</h2>
                                 <p style="margin: 0;">
-                                    <strong>@item.Date</strong> at <strong>@item.TimeSlot</strong>
+                                    <strong>@item.Date</strong> &middot; <strong>@item.TimeSlot@(!string.IsNullOrWhiteSpace(item.EndTime) ? $" – {item.EndTime}" : "")</strong>
                                 </p>
                             </div>
                             <span class="status-badge @GetStatusClass(item.Status)">@FormatStatus(item.Status)</span>

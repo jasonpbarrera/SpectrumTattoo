@@ -17,6 +17,9 @@ public sealed class BookingRecord
     [JsonPropertyName("businessId")]
     public string BusinessId { get; set; } = BookingStore.PartitionKey;
 
+    [JsonPropertyName("docType")]
+    public string DocType { get; set; } = "booking";
+
     [JsonPropertyName("artist")]
     public string Artist { get; set; } = string.Empty;
 
@@ -24,7 +27,10 @@ public sealed class BookingRecord
     public string Date { get; set; } = string.Empty; // yyyy-MM-dd
 
     [JsonPropertyName("timeSlot")]
-    public string TimeSlot { get; set; } = string.Empty; // e.g. "10:00 AM"
+    public string TimeSlot { get; set; } = string.Empty; // Start time e.g. "10:00 AM"
+
+    [JsonPropertyName("endTime")]
+    public string? EndTime { get; set; } // Optional custom end time e.g. "1:00 PM"
 
     [JsonPropertyName("serviceType")]
     public string ServiceType { get; set; } = "Custom Tattoo";
@@ -45,7 +51,7 @@ public sealed class BookingRecord
     public string IdeaDescription { get; set; } = string.Empty;
 
     [JsonPropertyName("status")]
-    public string Status { get; set; } = "PendingApproval"; // PendingApproval | ApprovedAwaitingDeposit | Confirmed | Declined
+    public string Status { get; set; } = "PendingApproval"; // PendingApproval | ApprovedAwaitingDeposit | Confirmed | Completed | Cancelled | Declined
 
     [JsonPropertyName("depositAmountCents")]
     public int DepositAmountCents { get; set; } = 5000;
@@ -66,15 +72,95 @@ public sealed class BookingRecord
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
+public sealed class TimeBlockRecord
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("businessId")]
+    public string BusinessId { get; set; } = BookingStore.PartitionKey;
+
+    [JsonPropertyName("docType")]
+    public string DocType { get; set; } = "time-block";
+
+    [JsonPropertyName("artist")]
+    public string Artist { get; set; } = "All Artists"; // Artist name or "All Artists"
+
+    [JsonPropertyName("date")]
+    public string Date { get; set; } = string.Empty; // yyyy-MM-dd
+
+    [JsonPropertyName("allDay")]
+    public bool AllDay { get; set; }
+
+    [JsonPropertyName("startTime")]
+    public string? StartTime { get; set; } // e.g. "11:00 AM"
+
+    [JsonPropertyName("endTime")]
+    public string? EndTime { get; set; } // e.g. "2:00 PM"
+
+    [JsonPropertyName("reason")]
+    public string? Reason { get; set; }
+
+    [JsonPropertyName("createdAt")]
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+public sealed class DaySchedule
+{
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; }
+
+    [JsonPropertyName("startTime")]
+    public string StartTime { get; set; } = "10:00 AM";
+
+    [JsonPropertyName("endTime")]
+    public string EndTime { get; set; } = "6:00 PM";
+}
+
+public sealed class ArtistScheduleRecord
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("businessId")]
+    public string BusinessId { get; set; } = BookingStore.PartitionKey;
+
+    [JsonPropertyName("docType")]
+    public string DocType { get; set; } = "artist-schedule";
+
+    [JsonPropertyName("artist")]
+    public string Artist { get; set; } = string.Empty;
+
+    // Keys: "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
+    [JsonPropertyName("days")]
+    public Dictionary<string, DaySchedule> Days { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    [JsonPropertyName("updatedAt")]
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
 public sealed class BookingStore
 {
     public const string PartitionKey = "spectrum-tattoo";
+
+    public static readonly string[] ResidentArtists =
+    [
+        "Dawn Yermasek",
+        "Tae",
+        "Kota",
+        "Kindra",
+        "LaCinda",
+        "Heavenly Huckaby"
+    ];
+
     private readonly string _containerId =
         Environment.GetEnvironmentVariable("COSMOS_BOOKINGS_CONTAINER") is { Length: > 0 } c
             ? c.Trim()
             : "spectrum-tattoo-bookings";
 
-    private static readonly ConcurrentDictionary<string, BookingRecord> MemoryFallback = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ConcurrentDictionary<string, BookingRecord> MemoryBookings = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ConcurrentDictionary<string, TimeBlockRecord> MemoryBlocks = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ConcurrentDictionary<string, ArtistScheduleRecord> MemorySchedules = new(StringComparer.OrdinalIgnoreCase);
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -137,11 +223,219 @@ public sealed class BookingStore
         };
     }
 
-    public async Task<List<BookingRecord>> ListAsync()
+    public static DaySchedule GetDefaultDaySchedule(DayOfWeek dow) => dow switch
     {
-        if (!_useCosmos)
-            return MemoryFallback.Values.OrderByDescending(b => b.CreatedAt).ToList();
+        DayOfWeek.Monday or DayOfWeek.Tuesday => new DaySchedule { Enabled = false, StartTime = "10:00 AM", EndTime = "6:00 PM" },
+        DayOfWeek.Saturday => new DaySchedule { Enabled = true, StartTime = "10:00 AM", EndTime = "4:00 PM" },
+        DayOfWeek.Sunday => new DaySchedule { Enabled = true, StartTime = "10:00 AM", EndTime = "3:00 PM" },
+        _ => new DaySchedule { Enabled = true, StartTime = "10:00 AM", EndTime = "6:00 PM" }
+    };
 
+    public static ArtistScheduleRecord CreateDefaultSchedule(string artist)
+    {
+        var rec = new ArtistScheduleRecord
+        {
+            Id = MakeScheduleId(artist),
+            Artist = artist
+        };
+        foreach (DayOfWeek dow in Enum.GetValues<DayOfWeek>())
+            rec.Days[dow.ToString()] = GetDefaultDaySchedule(dow);
+        return rec;
+    }
+
+    public static string MakeScheduleId(string artist)
+    {
+        var slug = new string(artist.ToLowerInvariant().Where(char.IsLetterOrDigit).ToArray());
+        return $"sched-{slug}";
+    }
+
+    public static bool TryParseMinutes(string? timeStr, out int minutes)
+    {
+        minutes = 0;
+        if (string.IsNullOrWhiteSpace(timeStr)) return false;
+        string[] formats = ["h:mm tt", "hh:mm tt", "H:mm", "HH:mm"];
+        if (DateTime.TryParseExact(timeStr.Trim(), formats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
+        {
+            minutes = dt.Hour * 60 + dt.Minute;
+            return true;
+        }
+        return false;
+    }
+
+    public static string FormatMinutes(int totalMinutes)
+    {
+        totalMinutes = Math.Clamp(totalMinutes, 0, 23 * 60 + 59);
+        var dt = DateTime.Today.AddMinutes(totalMinutes);
+        return dt.ToString("h:mm tt", CultureInfo.InvariantCulture);
+    }
+
+    public static string ComputeDefaultEndTime(string startTime, int durationMinutes = 90)
+    {
+        return TryParseMinutes(startTime, out var start)
+            ? FormatMinutes(start + durationMinutes)
+            : "11:30 AM";
+    }
+
+    public static (int Start, int End) GetBookingRange(BookingRecord b)
+    {
+        int start = TryParseMinutes(b.TimeSlot, out var s) ? s : 600;
+        int end = TryParseMinutes(b.EndTime, out var e) && e > start ? e : start + 90;
+        return (start, end);
+    }
+
+    public static (bool IsOpen, string Note, List<(string Time, bool Available)> Slots) ComputeAvailability(
+        string requestedArtist,
+        DateOnly date,
+        List<BookingRecord> bookings,
+        List<TimeBlockRecord> blocks,
+        List<ArtistScheduleRecord> schedules)
+    {
+        var dateStr = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var dowName = date.DayOfWeek.ToString();
+
+        // Check studio-wide all-day block
+        var studioAllDay = blocks.FirstOrDefault(bl =>
+            string.Equals(bl.Date, dateStr, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(bl.Artist, "All Artists", StringComparison.OrdinalIgnoreCase)
+            && bl.AllDay);
+        if (studioAllDay is not null)
+        {
+            var reason = string.IsNullOrWhiteSpace(studioAllDay.Reason) ? "Studio is blocked off on this date." : $"Studio closed: {studioAllDay.Reason}";
+            return (false, reason, []);
+        }
+
+        bool isFirstAvailable = string.Equals(requestedArtist, "First Available Artist", StringComparison.OrdinalIgnoreCase);
+
+        if (!isFirstAvailable)
+        {
+            var sched = schedules.FirstOrDefault(s => string.Equals(s.Artist, requestedArtist, StringComparison.OrdinalIgnoreCase));
+            var day = sched is not null && sched.Days.TryGetValue(dowName, out var d) ? d : GetDefaultDaySchedule(date.DayOfWeek);
+
+            if (!day.Enabled)
+                return (false, $"{requestedArtist} is not scheduled on {dowName}s. Please choose another day or artist.", []);
+
+            var artistAllDay = blocks.FirstOrDefault(bl =>
+                string.Equals(bl.Date, dateStr, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(bl.Artist, requestedArtist, StringComparison.OrdinalIgnoreCase)
+                && bl.AllDay);
+            if (artistAllDay is not null)
+            {
+                var reason = string.IsNullOrWhiteSpace(artistAllDay.Reason) ? $"{requestedArtist} is unavailable on this date." : $"{requestedArtist} unavailable: {artistAllDay.Reason}";
+                return (false, reason, []);
+            }
+
+            if (!TryParseMinutes(day.StartTime, out var workStart) || !TryParseMinutes(day.EndTime, out var workEnd) || workEnd <= workStart)
+                return (false, $"{requestedArtist} has no open hours on {dowName}.", []);
+
+            var slotList = BuildSlotsInWindow(workStart, workEnd);
+            var result = slotList.Select(slot =>
+            {
+                bool avail = IsArtistFreeForSlot(requestedArtist, dateStr, slot.Start, slot.End, bookings, blocks);
+                return (slot.Label, avail);
+            }).ToList();
+
+            var note = $"{requestedArtist} Hours: {FormatMinutes(workStart)} – {FormatMinutes(workEnd)}";
+            return (result.Count > 0, note, result);
+        }
+        else
+        {
+            // First Available Artist: union of working hours across all resident artists; slot is available if >= 1 artist is free
+            int minStart = int.MaxValue;
+            int maxEnd = int.MinValue;
+            var activeArtists = new List<(string Name, int Start, int End)>();
+
+            foreach (var artist in ResidentArtists)
+            {
+                var sched = schedules.FirstOrDefault(s => string.Equals(s.Artist, artist, StringComparison.OrdinalIgnoreCase));
+                var day = sched is not null && sched.Days.TryGetValue(dowName, out var d) ? d : GetDefaultDaySchedule(date.DayOfWeek);
+                if (!day.Enabled) continue;
+
+                bool artistAllDay = blocks.Any(bl =>
+                    string.Equals(bl.Date, dateStr, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(bl.Artist, artist, StringComparison.OrdinalIgnoreCase)
+                    && bl.AllDay);
+                if (artistAllDay) continue;
+
+                if (TryParseMinutes(day.StartTime, out var ws) && TryParseMinutes(day.EndTime, out var we) && we > ws)
+                {
+                    activeArtists.Add((artist, ws, we));
+                    if (ws < minStart) minStart = ws;
+                    if (we > maxEnd) maxEnd = we;
+                }
+            }
+
+            if (activeArtists.Count == 0)
+                return (false, "Studio is closed on this date. Please select another day.", []);
+
+            var slotList = BuildSlotsInWindow(minStart, maxEnd);
+            var result = slotList.Select(slot =>
+            {
+                bool anyFree = activeArtists.Any(a =>
+                    slot.Start >= a.Start
+                    && slot.End <= a.End
+                    && IsArtistFreeForSlot(a.Name, dateStr, slot.Start, slot.End, bookings, blocks));
+                return (slot.Label, anyFree);
+            }).ToList();
+
+            var note = $"Studio Hours: {FormatMinutes(minStart)} – {FormatMinutes(maxEnd)}";
+            return (result.Count > 0, note, result);
+        }
+    }
+
+    private static List<(string Label, int Start, int End)> BuildSlotsInWindow(int workStart, int workEnd)
+    {
+        var slots = new List<(string, int, int)>();
+        const int slotLength = 90;
+        for (int cursor = workStart; cursor + slotLength <= workEnd; cursor += slotLength)
+        {
+            slots.Add((FormatMinutes(cursor), cursor, cursor + slotLength));
+        }
+        return slots;
+    }
+
+    private static bool IsArtistFreeForSlot(
+        string artist,
+        string dateStr,
+        int slotStart,
+        int slotEnd,
+        List<BookingRecord> bookings,
+        List<TimeBlockRecord> blocks)
+    {
+        // Check time blocks for this artist or All Artists
+        foreach (var bl in blocks)
+        {
+            if (!string.Equals(bl.Date, dateStr, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!string.Equals(bl.Artist, artist, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(bl.Artist, "All Artists", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (bl.AllDay) return false;
+            if (TryParseMinutes(bl.StartTime, out var bs) && TryParseMinutes(bl.EndTime, out var be) && be > bs)
+            {
+                if (slotStart < be && slotEnd > bs)
+                    return false;
+            }
+        }
+
+        // Check confirmed / approved bookings for this artist
+        foreach (var b in bookings)
+        {
+            if (!string.Equals(b.Date, dateStr, StringComparison.OrdinalIgnoreCase)) continue;
+            if (b.Status is not "Confirmed" and not "ApprovedAwaitingDeposit") continue;
+            if (!string.Equals(b.Artist, artist, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(b.Artist, "First Available Artist", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var (bStart, bEnd) = GetBookingRange(b);
+            if (slotStart < bEnd && slotEnd > bStart)
+                return false;
+        }
+
+        return true;
+    }
+
+    private async Task<List<T>> QueryAsync<T>(string sql)
+    {
         string resourceLink = $"dbs/{_databaseId}/colls/{_containerId}";
         string requestUri = $"{_endpoint}/{resourceLink}/docs";
         string utcDate = DateTime.UtcNow.ToString("r", CultureInfo.InvariantCulture);
@@ -154,11 +448,7 @@ public sealed class BookingStore
         request.Headers.Add("x-ms-documentdb-isquery", "True");
         request.Headers.Add("x-ms-documentdb-query-enablecrosspartition", "True");
 
-        string bodyJson = JsonSerializer.Serialize(new
-        {
-            query = $"SELECT * FROM c WHERE c.businessId = '{PartitionKey}'",
-            parameters = Array.Empty<object>()
-        });
+        string bodyJson = JsonSerializer.Serialize(new { query = sql, parameters = Array.Empty<object>() });
         request.Content = new StringContent(bodyJson, Encoding.UTF8, "application/query+json");
         request.Content.Headers.ContentType!.CharSet = null;
 
@@ -172,37 +462,13 @@ public sealed class BookingStore
 
         using var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
         if (doc.RootElement.TryGetProperty("Documents", out var docsElem))
-        {
-            var list = JsonSerializer.Deserialize<List<BookingRecord>>(docsElem.GetRawText(), JsonOpts) ?? [];
-            return list.OrderByDescending(b => b.CreatedAt).ToList();
-        }
+            return JsonSerializer.Deserialize<List<T>>(docsElem.GetRawText(), JsonOpts) ?? [];
 
         return [];
     }
 
-    public async Task<BookingRecord?> GetAsync(string id)
+    private async Task<(bool Ok, string Error)> UpsertDocAsync<T>(T document)
     {
-        if (string.IsNullOrWhiteSpace(id)) return null;
-        var cleanId = id.Trim();
-
-        if (!_useCosmos)
-            return MemoryFallback.TryGetValue(cleanId, out var mem) ? mem : null;
-
-        var all = await ListAsync();
-        return all.FirstOrDefault(b => string.Equals(b.Id, cleanId, StringComparison.OrdinalIgnoreCase));
-    }
-
-    public async Task<(bool Ok, string Error)> UpsertAsync(BookingRecord record)
-    {
-        record.BusinessId = PartitionKey;
-        record.UpdatedAt = DateTimeOffset.UtcNow;
-
-        if (!_useCosmos)
-        {
-            MemoryFallback[record.Id] = record;
-            return (true, string.Empty);
-        }
-
         string resourceLink = $"dbs/{_databaseId}/colls/{_containerId}";
         string requestUri = $"{_endpoint}/{resourceLink}/docs";
         string utcDate = DateTime.UtcNow.ToString("r", CultureInfo.InvariantCulture);
@@ -214,7 +480,7 @@ public sealed class BookingStore
         request.Headers.Add("x-ms-version", "2018-12-31");
         request.Headers.Add("x-ms-documentdb-is-upsert", "True");
         request.Headers.Add("x-ms-documentdb-partitionkey", JsonSerializer.Serialize(new[] { PartitionKey }));
-        request.Content = new StringContent(JsonSerializer.Serialize(record, JsonOpts), Encoding.UTF8, "application/json");
+        request.Content = new StringContent(JsonSerializer.Serialize(document, JsonOpts), Encoding.UTF8, "application/json");
 
         var response = await _http.SendAsync(request);
         if (response.IsSuccessStatusCode)
@@ -225,17 +491,9 @@ public sealed class BookingStore
         return (false, $"Database write failed ({(int)response.StatusCode}).");
     }
 
-    public async Task<(bool Ok, string Error)> DeleteAsync(string id)
+    private async Task<(bool Ok, string Error)> DeleteDocAsync(string id)
     {
-        if (string.IsNullOrWhiteSpace(id)) return (false, "Booking id is required.");
         var cleanId = id.Trim();
-
-        if (!_useCosmos)
-        {
-            MemoryFallback.TryRemove(cleanId, out _);
-            return (true, string.Empty);
-        }
-
         string resourceLink = $"dbs/{_databaseId}/colls/{_containerId}/docs/{Uri.EscapeDataString(cleanId)}";
         string requestUri = $"{_endpoint}/{resourceLink}";
         string utcDate = DateTime.UtcNow.ToString("r", CultureInfo.InvariantCulture);
@@ -256,9 +514,130 @@ public sealed class BookingStore
         return (false, $"Database delete failed ({(int)response.StatusCode}).");
     }
 
+    public async Task<List<BookingRecord>> ListAsync()
+    {
+        if (!_useCosmos)
+            return MemoryBookings.Values.OrderByDescending(b => b.CreatedAt).ToList();
+
+        var list = await QueryAsync<BookingRecord>(
+            $"SELECT * FROM c WHERE c.businessId = '{PartitionKey}' AND (NOT IS_DEFINED(c.docType) OR c.docType = 'booking')");
+        return list.OrderByDescending(b => b.CreatedAt).ToList();
+    }
+
+    public async Task<BookingRecord?> GetAsync(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return null;
+        var cleanId = id.Trim();
+
+        if (!_useCosmos)
+            return MemoryBookings.TryGetValue(cleanId, out var mem) ? mem : null;
+
+        var all = await ListAsync();
+        return all.FirstOrDefault(b => string.Equals(b.Id, cleanId, StringComparison.OrdinalIgnoreCase));
+    }
+
+    public async Task<(bool Ok, string Error)> UpsertAsync(BookingRecord record)
+    {
+        record.BusinessId = PartitionKey;
+        record.DocType = "booking";
+        if (string.IsNullOrWhiteSpace(record.EndTime))
+            record.EndTime = ComputeDefaultEndTime(record.TimeSlot);
+        record.UpdatedAt = DateTimeOffset.UtcNow;
+
+        if (!_useCosmos)
+        {
+            MemoryBookings[record.Id] = record;
+            return (true, string.Empty);
+        }
+
+        return await UpsertDocAsync(record);
+    }
+
+    public async Task<(bool Ok, string Error)> DeleteAsync(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return (false, "Booking id is required.");
+        if (!_useCosmos)
+        {
+            MemoryBookings.TryRemove(id.Trim(), out _);
+            return (true, string.Empty);
+        }
+        return await DeleteDocAsync(id);
+    }
+
+    public async Task<List<TimeBlockRecord>> ListBlocksAsync()
+    {
+        if (!_useCosmos)
+            return MemoryBlocks.Values.OrderBy(b => b.Date).ThenBy(b => b.StartTime).ToList();
+
+        var list = await QueryAsync<TimeBlockRecord>(
+            $"SELECT * FROM c WHERE c.businessId = '{PartitionKey}' AND c.docType = 'time-block'");
+        return list.OrderBy(b => b.Date).ThenBy(b => b.StartTime).ToList();
+    }
+
+    public async Task<(bool Ok, string Error)> UpsertBlockAsync(TimeBlockRecord block)
+    {
+        block.BusinessId = PartitionKey;
+        block.DocType = "time-block";
+        if (string.IsNullOrWhiteSpace(block.Id))
+            block.Id = $"BLK-{Guid.NewGuid().ToString("N")[..6].ToUpperInvariant()}";
+
+        if (!_useCosmos)
+        {
+            MemoryBlocks[block.Id] = block;
+            return (true, string.Empty);
+        }
+
+        return await UpsertDocAsync(block);
+    }
+
+    public async Task<(bool Ok, string Error)> DeleteBlockAsync(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return (false, "Block id is required.");
+        if (!_useCosmos)
+        {
+            MemoryBlocks.TryRemove(id.Trim(), out _);
+            return (true, string.Empty);
+        }
+        return await DeleteDocAsync(id);
+    }
+
+    public async Task<List<ArtistScheduleRecord>> ListSchedulesAsync()
+    {
+        List<ArtistScheduleRecord> stored;
+        if (!_useCosmos)
+            stored = MemorySchedules.Values.ToList();
+        else
+            stored = await QueryAsync<ArtistScheduleRecord>(
+                $"SELECT * FROM c WHERE c.businessId = '{PartitionKey}' AND c.docType = 'artist-schedule'");
+
+        // Ensure every resident artist has a schedule entry returned
+        var result = new List<ArtistScheduleRecord>();
+        foreach (var artist in ResidentArtists)
+        {
+            var found = stored.FirstOrDefault(s => string.Equals(s.Artist, artist, StringComparison.OrdinalIgnoreCase));
+            result.Add(found ?? CreateDefaultSchedule(artist));
+        }
+        return result;
+    }
+
+    public async Task<(bool Ok, string Error)> UpsertScheduleAsync(ArtistScheduleRecord schedule)
+    {
+        schedule.BusinessId = PartitionKey;
+        schedule.DocType = "artist-schedule";
+        schedule.Id = MakeScheduleId(schedule.Artist);
+        schedule.UpdatedAt = DateTimeOffset.UtcNow;
+
+        if (!_useCosmos)
+        {
+            MemorySchedules[schedule.Id] = schedule;
+            return (true, string.Empty);
+        }
+
+        return await UpsertDocAsync(schedule);
+    }
+
     public async Task CleanupExpiredPhotosAsync(List<BookingRecord> bookings)
     {
-        // Studio is in Benton, TN (Eastern Time, UTC-5)
         var studioToday = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(-5));
 
         foreach (var b in bookings)
