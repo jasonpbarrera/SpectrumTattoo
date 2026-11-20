@@ -60,6 +60,7 @@ public sealed class ClientProfileRecord
     public string Email { get; set; } = string.Empty;
     public string? PreferredArtist { get; set; }
     public string StudioNotes { get; set; } = string.Empty;
+    public List<string> CompletedPhotos { get; set; } = [];
     public DateTimeOffset UpdatedAt { get; set; }
 }
 
@@ -188,7 +189,7 @@ public sealed class LocalBookingService(HttpClient http)
             body?.Clients ?? []);
     }
 
-    public async Task SaveClientProfileAsync(string pin, string phone, string name, string email, string studioNotes)
+    public async Task SaveClientProfileAsync(string pin, string phone, string name, string email, string studioNotes, List<string>? completedPhotos = null)
     {
         using var req = new HttpRequestMessage(HttpMethod.Post, ApiBase)
         {
@@ -198,7 +199,8 @@ public sealed class LocalBookingService(HttpClient http)
                 phone,
                 name,
                 email,
-                studioNotes
+                studioNotes,
+                completedPhotos
             })
         };
         req.Headers.Add("X-Studio-Pin", pin.Trim());

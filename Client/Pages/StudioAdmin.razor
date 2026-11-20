@@ -2,6 +2,7 @@
 @using SpectrumTattoo.Client.Services
 @inject LocalBookingService BookingService
 @inject NavigationManager Nav
+@inject IJSRuntime JS
 
 <PageTitle>Studio Portal | Spectrum Tattoo</PageTitle>
 
@@ -361,6 +362,46 @@
                                     }
                                 </div>
 
+                                <div style="margin-top: 1.1rem; padding-top: 0.9rem; border-top: 1px solid var(--hairline);">
+                                    <span class="field-label" style="display: block; margin-bottom: 0.35rem;">Finished Tattoo Photos (Auto-converted to WebP &middot; Up to 6)</span>
+                                    <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
+                                        <input id="done-photos-@c.PhoneKey"
+                                               type="file"
+                                               accept="image/*"
+                                               multiple
+                                               class="field-input"
+                                               style="max-width: 340px;"
+                                               disabled="@(_savingKey == $"photos-{c.PhoneKey}" || c.CompletedPhotos.Count >= 6)"
+                                               @onchange="() => OnCompletedPhotosSelectedAsync(c)" />
+                                        @if (_savingKey == $"photos-{c.PhoneKey}")
+                                        {
+                                            <span style="font-size: 0.85rem; color: var(--accent-gold);">Optimizing &amp; saving WebP...</span>
+                                        }
+                                        else if (_savedKey == $"photos-{c.PhoneKey}")
+                                        {
+                                            <span style="font-size: 0.85rem; color: #86efac; font-weight: 600;">&#10003; Photos saved</span>
+                                        }
+                                    </div>
+                                    @if (c.CompletedPhotos is { Count: > 0 })
+                                    {
+                                        <div class="ref-photo-grid">
+                                            @for (var i = 0; i < c.CompletedPhotos.Count; i++)
+                                            {
+                                                var idx = i;
+                                                var imgSrc = c.CompletedPhotos[idx];
+                                                <div class="ref-photo-item">
+                                                    <img src="@imgSrc" alt="Finished tattoo @(idx + 1) for @c.Name" @onclick="() => _lightboxImage = imgSrc" />
+                                                    <button type="button" class="ref-photo-remove" aria-label="Remove finished photo" @onclick="() => RemoveCompletedPhotoAsync(c, idx)">&times;</button>
+                                                </div>
+                                            }
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <p style="margin: 0; font-size: 0.84rem; color: var(--text-smoke);">No finished tattoo photos uploaded yet.</p>
+                                    }
+                                </div>
+
                                 @if (history.Count > 0)
                                 {
                                     <div style="margin-top: 1.15rem; padding-top: 0.9rem; border-top: 1px solid var(--hairline);">
@@ -711,6 +752,48 @@
             () => BookingService.SaveClientProfileAsync(_pin, c.Phone, c.Name, c.Email, notes),
             $"Saved private notes for {(string.IsNullOrWhiteSpace(c.Name) ? c.Phone : c.Name)}.",
             saveKey: $"client-{c.PhoneKey}");
+    }
+
+    private async Task OnCompletedPhotosSelectedAsync(ClientProfileRecord c)
+    {
+        var existing = c.CompletedPhotos ?? [];
+        if (existing.Count >= 6) return;
+
+        var saveKey = $"photos-{c.PhoneKey}";
+        var remaining = 6 - existing.Count;
+        var notes = _clientNotes.TryGetValue(c.PhoneKey, out var n) ? n : c.StudioNotes;
+
+        await RunActionAsync(
+            async () =>
+            {
+                var converted = await JS.InvokeAsync<string[]>("spectrumImages.processFiles", $"done-photos-{c.PhoneKey}", remaining, 960, 0.78);
+                if (converted is null || converted.Length == 0) return;
+
+                var updated = new List<string>(existing);
+                foreach (var img in converted)
+                {
+                    if (updated.Count < 6 && !string.IsNullOrWhiteSpace(img))
+                        updated.Add(img);
+                }
+
+                await BookingService.SaveClientProfileAsync(_pin, c.Phone, c.Name, c.Email, notes, updated);
+            },
+            $"Saved finished tattoo photos for {(string.IsNullOrWhiteSpace(c.Name) ? c.Phone : c.Name)}.",
+            saveKey: saveKey);
+    }
+
+    private async Task RemoveCompletedPhotoAsync(ClientProfileRecord c, int index)
+    {
+        if (c.CompletedPhotos is null || index < 0 || index >= c.CompletedPhotos.Count) return;
+
+        var updated = new List<string>(c.CompletedPhotos);
+        updated.RemoveAt(index);
+        var notes = _clientNotes.TryGetValue(c.PhoneKey, out var n) ? n : c.StudioNotes;
+
+        await RunActionAsync(
+            () => BookingService.SaveClientProfileAsync(_pin, c.Phone, c.Name, c.Email, notes, updated),
+            "Removed finished tattoo photo.",
+            saveKey: $"photos-{c.PhoneKey}");
     }
 
     private void LockPortal()

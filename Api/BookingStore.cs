@@ -168,6 +168,9 @@ public sealed class ClientProfileRecord
     [JsonPropertyName("studioNotes")]
     public string StudioNotes { get; set; } = string.Empty;
 
+    [JsonPropertyName("completedPhotos")]
+    public List<string> CompletedPhotos { get; set; } = [];
+
     [JsonPropertyName("updatedAt")]
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
 }

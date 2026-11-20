@@ -40,15 +40,16 @@ public class BookingsFunction(
         string? StartTime,
         string? Reason,
         Dictionary<string, DaySchedule>? Days,
-        string? StudioNotes);
+        string? StudioNotes,
+        List<string>? CompletedPhotos);
 
-    private static List<string> SanitizeImages(List<string>? raw)
+    private static List<string> SanitizeImages(List<string>? raw, int maxCount = 3)
     {
         if (raw is null || raw.Count == 0) return [];
-        var valid = new List<string>(3);
+        var valid = new List<string>(maxCount);
         foreach (var img in raw)
         {
-            if (valid.Count >= 3) break;
+            if (valid.Count >= maxCount) break;
             if (string.IsNullOrWhiteSpace(img) || img.Length > 350_000) continue;
             if (img.StartsWith("data:image/webp;base64,", StringComparison.OrdinalIgnoreCase)
                 || img.StartsWith("data:image/jpeg;base64,", StringComparison.OrdinalIgnoreCase)
@@ -407,6 +408,7 @@ public class BookingsFunction(
             if (!string.IsNullOrWhiteSpace(payload.Email)) profile.Email = payload.Email.Trim();
             if (!string.IsNullOrWhiteSpace(payload.Artist)) profile.PreferredArtist = payload.Artist.Trim();
             if (payload.StudioNotes is not null) profile.StudioNotes = payload.StudioNotes.Trim();
+            if (payload.CompletedPhotos is not null) profile.CompletedPhotos = SanitizeImages(payload.CompletedPhotos, maxCount: 6);
 
             var (savedProf, profErr) = await store.UpsertClientProfileAsync(profile);
             if (!savedProf)
