@@ -3,6 +3,7 @@
 @using SpectrumTattoo.Client.Services
 @inject LocalBookingService BookingService
 @inject NavigationManager Nav
+@inject IJSRuntime JS
 
 <PageTitle>Book a Consultation | Spectrum Tattoo — Benton, TN</PageTitle>
 
@@ -247,6 +248,35 @@
                                 <ValidationMessage For="@(() => _model.IdeaDescription)" class="validation-message" />
                             </div>
 
+                            <div class="field-group">
+                                <label class="field-label" for="ref-photos">Reference Photos (Optional &middot; Up to 3)</label>
+                                <input id="ref-photos"
+                                       type="file"
+                                       accept="image/*"
+                                       multiple
+                                       class="field-input"
+                                       disabled="@(_processingImages || _referenceImages.Count >= 3)"
+                                       @onchange="OnReferencePhotosSelected" />
+                                <span style="font-size: 0.78rem; color: var(--text-smoke); margin-top: 0.35rem;">
+                                    @(_processingImages
+                                        ? "Optimizing photos to WebP..."
+                                        : "Upload inspiration, placement, or existing tattoo photos. Automatically optimized and deleted after your appointment.")
+                                </span>
+                                @if (_referenceImages.Count > 0)
+                                {
+                                    <div class="ref-photo-grid">
+                                        @for (var i = 0; i < _referenceImages.Count; i++)
+                                        {
+                                            var idx = i;
+                                            <div class="ref-photo-item">
+                                                <img src="@_referenceImages[idx]" alt="Reference photo @(idx + 1)" />
+                                                <button type="button" class="ref-photo-remove" aria-label="Remove photo" @onclick="() => RemoveReferenceImage(idx)">&times;</button>
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                            </div>
+
                             <div class="deposit-notice">
                                 <strong>Artist Approval &amp; Deposit Policy:</strong> No card is charged on request. Once your artist approves your concept and time, a <strong>non-refundable $@((_depositCents / 100.0).ToString("0")) deposit</strong> secures your appointment.
                             </div>
@@ -342,6 +372,8 @@
     private string? _slotError;
     private string? _submitError;
     private LocalBookingRecord? _createdBooking;
+    private readonly List<string> _referenceImages = [];
+    private bool _processingImages;
 
     private string _lookupCode = string.Empty;
     private string? _lookupError;
@@ -436,6 +468,39 @@
         }
     }
 
+    private async Task OnReferencePhotosSelected(ChangeEventArgs _)
+    {
+        if (_referenceImages.Count >= 3) return;
+        _processingImages = true;
+        try
+        {
+            var remaining = 3 - _referenceImages.Count;
+            var converted = await JS.InvokeAsync<string[]>("spectrumImages.processFiles", "ref-photos", remaining, 960, 0.78);
+            if (converted is { Length: > 0 })
+            {
+                foreach (var img in converted)
+                {
+                    if (_referenceImages.Count < 3 && !string.IsNullOrWhiteSpace(img))
+                        _referenceImages.Add(img);
+                }
+            }
+        }
+        catch
+        {
+            _submitError = "Could not process one of the selected images. Please try a JPG, PNG, or WebP photo.";
+        }
+        finally
+        {
+            _processingImages = false;
+        }
+    }
+
+    private void RemoveReferenceImage(int index)
+    {
+        if (index >= 0 && index < _referenceImages.Count)
+            _referenceImages.RemoveAt(index);
+    }
+
     private async Task HandleSubmit()
     {
         _slotError = null;
@@ -461,11 +526,13 @@
                 Email = _model.Email,
                 Placement = _model.Placement,
                 IdeaDescription = _model.IdeaDescription,
+                ReferenceImages = [.. _referenceImages],
                 Status = "PendingApproval",
                 DepositAmountCents = _depositCents,
                 DepositPaid = false
             });
             _submitted = true;
+            _referenceImages.Clear();
             await LoadAvailabilityAsync();
         }
         catch (InvalidOperationException ex)

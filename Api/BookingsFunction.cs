@@ -33,7 +33,26 @@ public class BookingsFunction(
         string? Phone,
         string? Email,
         string? Placement,
-        string? IdeaDescription);
+        string? IdeaDescription,
+        List<string>? ReferenceImages);
+
+    private static List<string> SanitizeImages(List<string>? raw)
+    {
+        if (raw is null || raw.Count == 0) return [];
+        var valid = new List<string>(3);
+        foreach (var img in raw)
+        {
+            if (valid.Count >= 3) break;
+            if (string.IsNullOrWhiteSpace(img) || img.Length > 350_000) continue;
+            if (img.StartsWith("data:image/webp;base64,", StringComparison.OrdinalIgnoreCase)
+                || img.StartsWith("data:image/jpeg;base64,", StringComparison.OrdinalIgnoreCase)
+                || img.StartsWith("data:image/png;base64,", StringComparison.OrdinalIgnoreCase))
+            {
+                valid.Add(img);
+            }
+        }
+        return valid;
+    }
 
     private static string GetAdminPin() =>
         Environment.GetEnvironmentVariable("STUDIO_ADMIN_PIN") ?? "4110";
@@ -230,6 +249,7 @@ public class BookingsFunction(
                 return await JsonResponse(req, HttpStatusCode.Unauthorized, new { ok = false, error = "Invalid studio PIN." });
 
             var bookings = await store.ListAsync();
+            await store.CleanupExpiredPhotosAsync(bookings);
             return await JsonResponse(req, HttpStatusCode.OK, new
             {
                 ok = true,
@@ -304,7 +324,7 @@ public class BookingsFunction(
             return await JsonResponse(req, HttpStatusCode.OK, new { ok = true, deletedId = payload.Id.Trim() });
         }
 
-        if (postOp is "approve" or "confirm" or "confirm-manual" or "decline" or "cancel" or "simulate-deposit")
+        if (postOp is "approve" or "confirm" or "confirm-manual" or "decline" or "cancel" or "complete" or "clear-photos" or "simulate-deposit")
         {
             if (postOp is not "simulate-deposit" and not "cancel" && !IsAuthorized(req))
                 return await JsonResponse(req, HttpStatusCode.Unauthorized, new { ok = false, error = "Invalid studio PIN." });
@@ -330,10 +350,21 @@ public class BookingsFunction(
             {
                 item.Status = "Declined";
                 item.DepositPaid = false;
+                item.ReferenceImages.Clear();
             }
             else if (postOp == "cancel")
             {
                 item.Status = "Cancelled";
+                item.ReferenceImages.Clear();
+            }
+            else if (postOp == "complete")
+            {
+                item.Status = "Completed";
+                item.ReferenceImages.Clear();
+            }
+            else if (postOp == "clear-photos")
+            {
+                item.ReferenceImages.Clear();
             }
 
             if (payload.ArtistNote is not null) item.ArtistNote = payload.ArtistNote;
@@ -381,6 +412,7 @@ public class BookingsFunction(
             Email = (payload.Email ?? string.Empty).Trim(),
             Placement = (payload.Placement ?? string.Empty).Trim(),
             IdeaDescription = (payload.IdeaDescription ?? string.Empty).Trim(),
+            ReferenceImages = SanitizeImages(payload.ReferenceImages),
             Status = "PendingApproval",
             DepositAmountCents = GetDefaultDepositCents(),
             DepositPaid = false,

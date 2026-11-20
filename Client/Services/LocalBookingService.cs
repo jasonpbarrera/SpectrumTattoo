@@ -22,6 +22,7 @@ public sealed class LocalBookingRecord
     public int DepositAmountCents { get; set; } = 5000;
     public bool DepositPaid { get; set; }
     public string? ArtistNote { get; set; }
+    public List<string> ReferenceImages { get; set; } = [];
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }
 
@@ -82,7 +83,8 @@ public sealed class LocalBookingService(HttpClient http)
             phone = record.Phone,
             email = record.Email,
             placement = record.Placement,
-            ideaDescription = record.IdeaDescription
+            ideaDescription = record.IdeaDescription,
+            referenceImages = record.ReferenceImages
         });
 
         var body = await resp.Content.ReadFromJsonAsync<SingleBookingApiResponse>();

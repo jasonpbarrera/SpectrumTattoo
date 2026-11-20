@@ -56,6 +56,9 @@ public sealed class BookingRecord
     [JsonPropertyName("artistNote")]
     public string? ArtistNote { get; set; }
 
+    [JsonPropertyName("referenceImages")]
+    public List<string> ReferenceImages { get; set; } = [];
+
     [JsonPropertyName("createdAt")]
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 
@@ -251,6 +254,28 @@ public sealed class BookingStore
         string err = await response.Content.ReadAsStringAsync();
         _logger.LogError("Cosmos delete failed with {Status}: {Error}", response.StatusCode, err);
         return (false, $"Database delete failed ({(int)response.StatusCode}).");
+    }
+
+    public async Task CleanupExpiredPhotosAsync(List<BookingRecord> bookings)
+    {
+        // Studio is in Benton, TN (Eastern Time, UTC-5)
+        var studioToday = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(-5));
+
+        foreach (var b in bookings)
+        {
+            if (b.ReferenceImages is null || b.ReferenceImages.Count == 0)
+                continue;
+
+            bool isPastAppointment = DateOnly.TryParseExact(b.Date, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var apptDate)
+                                     && apptDate < studioToday;
+            bool isClosedStatus = b.Status is "Completed" or "Cancelled" or "Declined";
+
+            if (isPastAppointment || isClosedStatus)
+            {
+                b.ReferenceImages.Clear();
+                await UpsertAsync(b);
+            }
+        }
     }
 
     private static string GenerateCosmosAuthToken(
