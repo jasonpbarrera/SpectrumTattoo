@@ -321,6 +321,28 @@
                                     <button type="button" class="btn btn-primary btn-sm" @onclick="() => SaveClientNotesAsync(c)">Save Client Notes</button>
                                 </div>
 
+                                @{
+                                    var clientPhotos = history
+                                        .Where(h => h.ReferenceImages is { Count: > 0 })
+                                        .SelectMany(h => h.ReferenceImages.Select(img => (h.Date, h.ServiceType, Img: img)))
+                                        .ToList();
+                                }
+                                @if (clientPhotos.Count > 0)
+                                {
+                                    <div style="margin-top: 1rem;">
+                                        <span class="field-label" style="display: block; margin-bottom: 0.35rem;">Saved Reference Photos (click to zoom)</span>
+                                        <div class="ref-photo-grid">
+                                            @foreach (var p in clientPhotos)
+                                            {
+                                                var imgSrc = p.Img;
+                                                <div class="ref-photo-item" title="@p.Date · @p.ServiceType">
+                                                    <img src="@imgSrc" alt="Reference photo from @p.Date" @onclick="() => _lightboxImage = imgSrc" />
+                                                </div>
+                                            }
+                                        </div>
+                                    </div>
+                                }
+
                                 @if (history.Count > 0)
                                 {
                                     <div style="margin-top: 1.15rem; padding-top: 0.9rem; border-top: 1px solid var(--hairline);">
@@ -801,7 +823,7 @@
         var note = _notes.TryGetValue(id, out var n) ? n : null;
         await RunActionAsync(
             () => BookingService.UpdateStatusAsync(id, "complete", _pin, artistNote: note),
-            "Appointment marked completed and reference photos cleared.");
+            "Appointment marked completed.");
     }
 
     private async Task ClearPhotosAsync(string id)

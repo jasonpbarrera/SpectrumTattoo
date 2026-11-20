@@ -288,7 +288,6 @@ public class BookingsFunction(
             await Task.WhenAll(bookingsTaskAdmin, blocksTaskAdmin, schedulesTaskAdmin);
 
             var bookings = bookingsTaskAdmin.Result;
-            await store.CleanupExpiredPhotosAsync(bookings);
             var clients = await store.ListClientProfilesAsync(bookings);
 
             return await JsonResponse(req, HttpStatusCode.OK, new
@@ -482,17 +481,14 @@ public class BookingsFunction(
             {
                 item.Status = "Declined";
                 item.DepositPaid = false;
-                item.ReferenceImages.Clear();
             }
             else if (postOp == "cancel")
             {
                 item.Status = "Cancelled";
-                item.ReferenceImages.Clear();
             }
             else if (postOp == "complete")
             {
                 item.Status = "Completed";
-                item.ReferenceImages.Clear();
             }
             else if (postOp == "clear-photos")
             {
