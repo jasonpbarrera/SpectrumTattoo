@@ -152,10 +152,10 @@
                                 </div>
                                 <p style="margin-bottom: 0.75rem; color: var(--text-bone);">@b.IdeaDescription</p>
 
-                                @if (b.ReferenceImages is { Count: > 0 })
-                                {
-                                    <div style="margin-bottom: 0.85rem;">
-                                        <span class="field-label" style="display: block; margin-bottom: 0.35rem;">Client Reference Photos (click to zoom)</span>
+                                <div style="margin-bottom: 0.85rem;">
+                                    <span class="field-label" style="display: block; margin-bottom: 0.35rem;">Client Reference Photos @(b.ReferenceImages is { Count: > 0 } ? "(click to zoom)" : "")</span>
+                                    @if (b.ReferenceImages is { Count: > 0 })
+                                    {
                                         <div class="ref-photo-grid">
                                             @for (var i = 0; i < b.ReferenceImages.Count; i++)
                                             {
@@ -165,8 +165,12 @@
                                                 </div>
                                             }
                                         </div>
-                                    </div>
-                                }
+                                    }
+                                    else
+                                    {
+                                        <p style="margin: 0; font-size: 0.82rem; color: var(--text-smoke);">No reference photos uploaded with this request.</p>
+                                    }
+                                </div>
 
                                 <div class="form-grid" style="grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); margin-top: 0.75rem;">
                                     <div class="field-group">
@@ -217,9 +221,13 @@
                                     }
                                     @if (b.Status is "PendingApproval" or "ApprovedAwaitingDeposit" or "Confirmed")
                                     {
-                                        <button type="button" class="btn btn-outline btn-sm" @onclick="() => SaveBookingEditsAsync(b.Id)">
-                                            Save Time &amp; Note
+                                        <button type="button" class="btn btn-outline btn-sm" disabled="@(_savingKey == $"booking-{b.Id}")" @onclick="() => SaveBookingEditsAsync(b.Id)">
+                                            @(_savingKey == $"booking-{b.Id}" ? "Saving..." : "Save Time & Note")
                                         </button>
+                                        @if (_savedKey == $"booking-{b.Id}")
+                                        {
+                                            <span style="font-size: 0.85rem; color: #86efac; font-weight: 600;">&#10003; Saved</span>
+                                        }
                                     }
                                     @if (b.Status == "Confirmed")
                                     {
@@ -317,8 +325,14 @@
                                     <textarea rows="3" class="field-textarea" @bind="_clientNotes[c.PhoneKey]" placeholder="e.g. Sits great for long sessions, working on floral half-sleeve, prefers numbing spray, skin notes..."></textarea>
                                 </div>
 
-                                <div style="margin-top: 0.75rem;">
-                                    <button type="button" class="btn btn-primary btn-sm" @onclick="() => SaveClientNotesAsync(c)">Save Client Notes</button>
+                                <div style="margin-top: 0.75rem; display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem;">
+                                    <button type="button" class="btn btn-primary btn-sm" disabled="@(_savingKey == $"client-{c.PhoneKey}")" @onclick="() => SaveClientNotesAsync(c)">
+                                        @(_savingKey == $"client-{c.PhoneKey}" ? "Saving..." : "Save Client Notes")
+                                    </button>
+                                    @if (_savedKey == $"client-{c.PhoneKey}")
+                                    {
+                                        <span style="font-size: 0.88rem; color: #86efac; font-weight: 600;">&#10003; Client notes saved</span>
+                                    }
                                 </div>
 
                                 @{
@@ -327,10 +341,10 @@
                                         .SelectMany(h => h.ReferenceImages.Select(img => (h.Date, h.ServiceType, Img: img)))
                                         .ToList();
                                 }
-                                @if (clientPhotos.Count > 0)
-                                {
-                                    <div style="margin-top: 1rem;">
-                                        <span class="field-label" style="display: block; margin-bottom: 0.35rem;">Saved Reference Photos (click to zoom)</span>
+                                <div style="margin-top: 1.1rem; padding-top: 0.9rem; border-top: 1px solid var(--hairline);">
+                                    <span class="field-label" style="display: block; margin-bottom: 0.35rem;">Saved Reference Photos @(clientPhotos.Count > 0 ? "(click to zoom)" : "")</span>
+                                    @if (clientPhotos.Count > 0)
+                                    {
                                         <div class="ref-photo-grid">
                                             @foreach (var p in clientPhotos)
                                             {
@@ -340,8 +354,12 @@
                                                 </div>
                                             }
                                         </div>
-                                    </div>
-                                }
+                                    }
+                                    else
+                                    {
+                                        <p style="margin: 0; font-size: 0.84rem; color: var(--text-smoke);">No reference photos uploaded yet. Any photos this client attaches to a booking will appear here.</p>
+                                    }
+                                </div>
 
                                 @if (history.Count > 0)
                                 {
@@ -511,8 +529,14 @@
                         }
                     </div>
 
-                    <div style="margin-top: 1.25rem;">
-                        <button type="button" class="btn btn-primary btn-sm" @onclick="SaveScheduleAsync">Save @_selectedScheduleArtist's Schedule</button>
+                    <div style="margin-top: 1.25rem; display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem;">
+                        <button type="button" class="btn btn-primary btn-sm" disabled="@(_savingKey == "schedule")" @onclick="SaveScheduleAsync">
+                            @(_savingKey == "schedule" ? "Saving..." : $"Save {_selectedScheduleArtist}'s Schedule")
+                        </button>
+                        @if (_savedKey == "schedule")
+                        {
+                            <span style="font-size: 0.88rem; color: #86efac; font-weight: 600;">&#10003; Schedule saved</span>
+                        }
                     </div>
                 </div>
             }
@@ -557,6 +581,8 @@
     private string _artistFilter = "All";
     private string? _confirmDeleteId;
     private string? _lightboxImage;
+    private string? _savingKey;
+    private string? _savedKey;
 
     private List<LocalBookingRecord> _bookings = [];
     private List<TimeBlockRecord> _blocks = [];
@@ -683,7 +709,8 @@
         var notes = _clientNotes.TryGetValue(c.PhoneKey, out var n) ? n : string.Empty;
         await RunActionAsync(
             () => BookingService.SaveClientProfileAsync(_pin, c.Phone, c.Name, c.Email, notes),
-            $"Saved private notes for {(string.IsNullOrWhiteSpace(c.Name) ? c.Phone : c.Name)}.");
+            $"Saved private notes for {(string.IsNullOrWhiteSpace(c.Name) ? c.Phone : c.Name)}.",
+            saveKey: $"client-{c.PhoneKey}");
     }
 
     private void LockPortal()
@@ -791,7 +818,8 @@
         var end = _editEnd.TryGetValue(id, out var en) ? en : null;
         await RunActionAsync(
             () => BookingService.UpdateStatusAsync(id, "update-booking", _pin, artistNote: note, depositCents: dollars * 100, date: date, timeSlot: start, endTime: end),
-            "Appointment time and details saved.");
+            "Appointment time and details saved.",
+            saveKey: $"booking-{id}");
     }
 
     private async Task ApproveAsync(string id)
@@ -880,18 +908,22 @@
     {
         await RunActionAsync(
             () => BookingService.SaveScheduleAsync(_pin, _selectedScheduleArtist, _editingDays),
-            $"Saved weekly schedule for {_selectedScheduleArtist}.");
+            $"Saved weekly schedule for {_selectedScheduleArtist}.",
+            saveKey: "schedule");
     }
 
-    private async Task RunActionAsync(Func<Task> action, string? successMessage = null)
+    private async Task RunActionAsync(Func<Task> action, string? successMessage = null, string? saveKey = null)
     {
         _actionError = null;
         _actionNotice = null;
+        _savedKey = null;
+        _savingKey = saveKey;
         try
         {
             await action();
             await LoadDashboardAsync();
             _actionNotice = successMessage;
+            _savedKey = saveKey;
         }
         catch (InvalidOperationException ex)
         {
@@ -900,6 +932,10 @@
         catch
         {
             _actionError = "Could not complete that action. Please refresh and try again.";
+        }
+        finally
+        {
+            _savingKey = null;
         }
     }
 
